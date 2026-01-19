@@ -1,0 +1,1076 @@
+package spl
+
+import (
+	"strings"
+	"testing"
+)
+
+// Real-world SPL queries collected from GitHub repositories:
+// - github.com/inodee/threathunting-spl
+// - github.com/west-wind/Threat-Hunting-With-Splunk
+// - github.com/shauntdergrigorian/splunkqueries
+// - github.com/pe3zx/crowdstrike-falcon-queries
+
+var realWorldQueries = []struct {
+	name  string
+	query string
+}{
+	// Zerologon detection
+	{
+		name:  "zerologon_detection",
+		query: `index=windows (sourcetype="WinEventLog:Security" OR source="windows_security") EventCode="4742" OR EventCode="4624" AND (src_user="*anonymous*" OR member_id="*S-1-0*") | eval local_system=mvindex(upper(split(user,"$")),0) | search host=local_system | table _time EventCode dest host ComputerName src_user Account_Name local_system user Security_ID member_id src_nt_domain dest_nt_domain`,
+	},
+	// Username guessing brute force
+	{
+		name:  "brute_force_username_guessing",
+		query: `index=windows sourcetype=windows EventCode=4625 OR EventCode=4624 | bin _time span=5m as minute | rex "Security ID:\s*\w*\s*\w*\s*Account Name:\s*(?<username>.*)\s*Account Domain:" | stats count(Keywords) as Attempts, count(eval(match(Keywords,"Audit Failure"))) as Failed, count(eval(match(Keywords,"Audit Success"))) as Success by minute username | where Failed>=4 | stats dc(username) as Total by minute | where Total>5`,
+	},
+	// Successful file access
+	{
+		name:  "successful_file_access",
+		query: `index=windows sourcetype=WinEventLog (Relative_Target_Name!="\"" Relative_Target_Name!="*.ini") user!="*$" | bucket span=1d _time | stats count by Relative_Target_Name, user, _time, status | rename _time as Day | convert ctime(Day)`,
+	},
+	// Successful logons
+	{
+		name:  "successful_logons",
+		query: `index=windows source="WinEventLog:security" EventCode=4624 Logon_Type IN (2,7,10,11) NOT user IN ("DWM-*", "UMFD-*") | eval Workstation_Name=lower(Workstation_Name) | eval host=lower(host) | eval hammer=_time | bucket span=12h hammer | stats values(Logon_Type) as "Logon Type" count sparkline by user host, hammer, Workstation_Name | rename hammer as "12 hour blocks" host as "Target Host" Workstation_Name as "Source Host" | convert ctime("12 hour blocks") | sort - "12 hour blocks"`,
+	},
+	// Failed logons
+	{
+		name:  "failed_logons",
+		query: `index=windows source="WinEventLog:security" EventCode=4625 | eval Workstation_Name=lower(Workstation_Name) | eval host=lower(host) | eval hammer=_time | bucket span=5m hammer | stats count sparkline by user host, hammer, Workstation_Name | rename hammer as "5 minute blocks" host as "Target Host" Workstation_Name as "Source Host" | convert ctime("5 minute blocks")`,
+	},
+	// User logon duration
+	{
+		name:  "user_logon_duration",
+		query: `index=windows source="wineventlog:security" action=success Logon_Type=2 (EventCode=4624 OR EventCode=4634 OR EventCode=4779 OR EventCode=4800 OR EventCode=4801 OR EventCode=4802 OR EventCode=4803 OR EventCode=4804) user!="anonymous logon" user!="DWM-*" user!="UMFD-*" user!=SYSTEM user!=*$ (Logon_Type=2 OR Logon_Type=7 OR Logon_Type=10) | convert timeformat="%a %B %d %Y" ctime(_time) AS Date | streamstats earliest(_time) AS login, latest(_time) AS logout by Date, host | eval session_duration=logout-login | eval h=floor(session_duration/3600) | eval m=floor((session_duration-(h*3600))/60) | eval SessionDuration=h."h ".m."m " | convert timeformat=" %m/%d/%y - %I:%M %P" ctime(login) AS login | convert timeformat=" %m/%d/%y - %I:%M %P" ctime(logout) AS logout | stats count AS auth_event_count, earliest(login) as login, max(SessionDuration) AS sesion_duration, latest(logout) as logout, values(Logon_Type) AS logon_types by Date, host, user`,
+	},
+	// Locked out accounts
+	{
+		name:  "locked_out_accounts",
+		query: `index=windows sourcetype="WinEventLog:Security" EventCode=4625 AND Status=0xC0000234 | timechart count by user | sort -count`,
+	},
+	// AD password changes
+	{
+		name:  "ad_password_changes",
+		query: `index=windows source="WinEventLog:Security" EventCode=4723 src_user!="*$" src_user!="_svc_*" | eval daynumber=strftime(_time,"%Y-%m-%d") | chart count by daynumber, status | eval daynumber = mvindex(split(daynumber,"-"),2)`,
+	},
+	// Pass the hash detection
+	{
+		name:  "pass_the_hash",
+		query: `index=windows (EventCode=4624 Logon_Type=3) OR (EventCode=4625 Logon_Type=3) Authentication_Package="NTLM" NOT Account_Domain=YOURDOMAIN NOT Account_Name="ANONYMOUS LOGON"`,
+	},
+	// Passwords as usernames
+	{
+		name:  "passwords_as_usernames",
+		query: `index=windows source=WinEventLog:Security TaskCategory=Logon Keywords="Audit Failure" | eval password=if(match(User_Name, "^(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[\W])(?=.{10,})"), "Yes", "No") | stats count by password User_Name | search password=Yes`,
+	},
+	// Failed login to disabled account
+	{
+		name:  "failed_login_disabled_account",
+		query: `index=windows source="WinEventLog:security" EventCode=4625 (Sub_Status="0xc0000072" OR Sub_Status="0xC0000072") Security_ID!="NULL SID" Account_Name!="*$" | eval Date=strftime(_time, "%Y/%m/%d") | rex "Which\sLogon\sFailed:\s+\S+\s\S+\s+\S+\s+Account\sName:\s+(?<facct>\S+)" | stats count by Date, facct, host, Keywords | rename facct as "Target Account" host as "Host" Keywords as "Status" count as "Count"`,
+	},
+	// Audit logs cleared
+	{
+		name:  "audit_logs_cleared",
+		query: `index=windows source=WinEventLog:security (EventCode=1102 OR EventCode=517) | eval Date=strftime(_time, "%Y/%m/%d") | stats count by Client_User_Name, host, index, Date | sort - Date | rename Client_User_Name as "Account Name"`,
+	},
+	// Failed RDP
+	{
+		name:  "failed_rdp",
+		query: `index=windows source=WinEventLog:Security sourcetype=WinEventLog:security Logon_Type=10 EventCode=4625 | eval Date=strftime(_time, "%Y/%m/%d") | rex "Failed:\s+.*\s+Account\sName:\s+(?<TargetAccount>\S+)\s" | stats count by Date, TargetAccount, Failure_Reason, host | sort - Date`,
+	},
+	// Account re-enabled
+	{
+		name:  "account_reenabled",
+		query: `index=windows sourcetype=WinEventLog:Security EventCode=4722 | eval Date=strftime(_time, "%Y/%m/%d") | rex "ID:\s+\w+\\\(?<sourceaccount>\S+)\s+" | rex "Account:\s+Security\sID:\s+\w+\\\(?<targetaccount>\S+)\s+" | stats count by Date, sourceaccount, targetaccount, Keywords, host | rename sourceaccount as "Source Account" | rename targetaccount as "Target Account" | sort - Date`,
+	},
+	// New service installation
+	{
+		name:  "new_service_installation",
+		query: `index=windows sourcetype=WinEventLog:Security (EventCode=4697 OR EventCode=601) | eval Date=strftime(_time, "%Y/%m/%d") | eval Status=coalesce(Keywords,Type) | stats count by Date, Service_Name, Service_File_Name, Service_Account, host, Status`,
+	},
+	// Group membership changes
+	{
+		name:  "group_membership_changes",
+		query: `index=windows sourcetype=WinEventLog:Security (EventCode=4728 OR EventCode=4732 OR EventCode=4746 OR EventCode=4751 OR EventCode=4756 OR EventCode=4161 OR EventCode=4185) | eval Date=strftime(_time, "%Y/%m/%d") | rex "Member:\s+\w+\s\w+:.*\\\(?<TargetAccount>.*)" | rex "Account\sName:\s+(?<SourceAccount>.*)" | stats count by Date, TargetAccount, SourceAccount, Group_Name, host, Keywords | sort - Date | rename SourceAccount as "Administrator Account" | rename TargetAccount as "Target Account"`,
+	},
+	// Privilege escalation
+	{
+		name:  "privilege_escalation",
+		query: `index=windows sourcetype="WinEventLog:Security" (EventCode=576 OR EventCode=4672 OR EventCode=577 OR EventCode=4673 OR EventCode=578 OR EventCode=4674) | stats count by user`,
+	},
+	// Weekend activity
+	{
+		name:  "weekend_activity",
+		query: `index=windows sourcetype="WinEventLog:Security" (date_wday=saturday OR date_wday=sunday) | stats count by Account_Name, date_wday`,
+	},
+	// CrowdStrike - Renamed executables
+	{
+		name:  "crowdstrike_renamed_exe",
+		query: `event_simpleName="NewExecutableRenamed" | rename TargetFileName as ImageFileName | join ImageFileName [search event_simpleName="ProcessRollup2"] | table ComputerName SourceFileName ImageFileName CommandLine`,
+	},
+	// CrowdStrike - LOLBins with network connections
+	{
+		name:  "crowdstrike_lolbins_network",
+		query: `event_simpleName="DnsRequest" | rename ContextProcessId as TargetProcessId | join TargetProcessId [search event_simpleName="ProcessRollup2" (FileName=Certutil.exe OR FileName=Cmd.exe OR FileName=Cscript.exe OR FileName=Mshta.exe OR FileName=Powershell.exe OR FileName=Rundll32.exe OR FileName=Wscript.exe)] | table ComputerName timestamp ImageFileName DomainName CommandLine`,
+	},
+	// Linux cron URL extraction
+	{
+		name:  "linux_cron_urls",
+		query: `index=hosts sourcetype=linux_messages process=CROND | rex field=_raw "((crond|CROND)\D[0-9]{4,5}\D:\s\D[a-z]{3,}\D\s)(?<action>\w+)\s\((?<CronCommand>.*(?=\)))" | where isnotnull(action) | search action=CMD | rex field=CronCommand "(?<url>https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&\/=]*))" | where isnotnull(url) | dedup host url | search NOT url="http://127.0.0.1*" | table _time host action CronCommand url`,
+	},
+	// Linux audit - web server activity
+	{
+		name:  "linux_audit_webserver",
+		query: `index=hosts sourcetype="linux:audit" ((type=SYSCALL OR type=EXECVE) AND euid=33) OR (type=PATH AND (name="/var/www/html" OR name=*.php)) | table _time host type syscall euid pid ppid comm`,
+	},
+	// PowerShell obfuscation analysis
+	{
+		name:  "powershell_obfuscation",
+		query: `index=windows sourcetype=WinEventLog:Security EventCode=4688 | eval ps_command=CommandLine | eval obf_symbol=ps_command | makemv tokenizer="(['@%^,;:=&+\"\(\{\)\}\!\*\./\?_\[\]\|<>~$])" obf_symbol | eval obf_symbol_count=mvcount(obf_symbol) | eval ps_len=len(ps_command) | where ps_len>100`,
+	},
+	// Suspicious PowerShell cmdlets
+	{
+		name:  "suspicious_powershell_cmdlets",
+		query: `index=windows sourcetype=WinEventLog EventCode=4688 CommandLine=*powershell* | where match(CommandLine, "(?i)Invoke-Mimikatz|Invoke-Expression|Invoke-WebRequest|Invoke-Command|FromBase64String|DownloadString|IEX|iex") | table _time ComputerName User CommandLine`,
+	},
+	// Web client activity
+	{
+		name:  "powershell_webclient",
+		query: `index=windows sourcetype=WinEventLog:Security EventCode=4688 | where match(CommandLine, "(?i)RestMethod|webclient|WebRequest|Net\.Socket|curl|iwr\s+") | table _time host User CommandLine`,
+	},
+	// Base64 encoded commands
+	{
+		name:  "base64_commands",
+		query: `index=windows sourcetype=WinEventLog:Security EventCode=4688 | where match(CommandLine, "(?i)[a-z0-9+/=]{60}") | eval encoded_len=len(CommandLine) | where encoded_len>200 | table _time host User CommandLine encoded_len`,
+	},
+	// Account creation/deletion timing
+	{
+		name:  "account_creation_deletion",
+		query: `index=windows sourcetype=WinEventLog:Security (EventCode=4726 OR EventCode=4720) | eval Date=strftime(_time, "%Y/%m/%d") | rex "Subject:\s+\w+\s\S+\s+\S+\s+\w+\s\w+:\s+(?<SourceAccount>\S+)" | rex "Target\s\w+:\s+\w+\s\w+:\s+\S+\s+\w+\s\w+:\s+(?<DeletedAccount>\S+)" | rex "New\s\w+:\s+\w+\s\w+:\s+\S+\s+\w+\s\w+:\s+(?<NewAccount>\S+)" | eval SuspectAccount=coalesce(DeletedAccount,NewAccount) | transaction SuspectAccount startswith="EventCode=4720" endswith="EventCode=4726" | eval duration=round(((duration/60)/60)/24, 2) | eval Age=case(duration<=1, "Critical", duration>1 AND duration<=7, "Warning", duration>7, "Normal") | table Date, index, host, SourceAccount, SuspectAccount, duration, Age`,
+	},
+	// Console lock duration
+	{
+		name:  "console_lock_duration",
+		query: `index=windows sourcetype=WinEventLog:Security (EventCode=4800 OR EventCode=4801) | eval Date=strftime(_time, "%Y/%m/%d") | transaction host Account_Name startswith=EventCode=4800 endswith=EventCode=4801 | eval duration = duration/60 | eval duration=round(duration,2) | table host, Account_Name, duration, Date | rename duration as "Console Lock Duration in Minutes" | sort - date`,
+	},
+	// RDP port change detection
+	{
+		name:  "rdp_port_change",
+		query: `event_simpleName="RegSystemConfigValueUpdate" AND RegObjectName="*\RDP-Tcp" AND RegValueName="PortNumber" | rename RegNumericValue_decimal as "NewRDPPort" | table timestamp, ComputerName, NewRDPPort`,
+	},
+	// DNS tunneling detection
+	{
+		name:  "dns_tunneling",
+		query: `index=dns sourcetype=stream:dns | eval query_len=len(query) | where query_len > 50 | stats count avg(query_len) as avg_len max(query_len) as max_len by src_ip query_type | where count > 100 AND avg_len > 40`,
+	},
+	// Network beaconing
+	{
+		name:  "network_beaconing",
+		query: `index=firewall sourcetype=pan:traffic action=allowed dest_port=443 | bucket _time span=1m | stats count by _time src_ip dest_ip | streamstats window=60 avg(count) as avg_count stdev(count) as stdev_count by src_ip dest_ip | where stdev_count < 1 AND count > 0`,
+	},
+	// Sysmon process creation with suspicious parents
+	{
+		name:  "sysmon_suspicious_parent",
+		query: `index=windows sourcetype="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=1 | where match(ParentImage, "(?i)winword\.exe|excel\.exe|powerpnt\.exe|outlook\.exe") | where match(Image, "(?i)cmd\.exe|powershell\.exe|wscript\.exe|cscript\.exe|mshta\.exe") | table _time ComputerName User ParentImage Image CommandLine`,
+	},
+	// O365 suspicious file downloads
+	{
+		name:  "o365_file_downloads",
+		query: `index=o365 sourcetype="o365:management:activity" Operation=FileDownloaded | stats count by UserId, ClientIP, SourceFileName | where count > 50`,
+	},
+	// AWS console logins from unusual locations
+	{
+		name:  "aws_unusual_logins",
+		query: `index=aws sourcetype=aws:cloudtrail eventName=ConsoleLogin | iplocation sourceIPAddress | stats count by userIdentity.userName, sourceIPAddress, Country, City | where count < 3`,
+	},
+	// GCP IAM changes
+	{
+		name:  "gcp_iam_changes",
+		query: `index=gcp sourcetype=google:gcp:pubsub:message protoPayload.methodName="*SetIamPolicy*" | table _time protoPayload.authenticationInfo.principalEmail protoPayload.resourceName protoPayload.methodName`,
+	},
+	// Failed authentication with non-existing accounts
+	{
+		name:  "failed_auth_nonexistent",
+		query: `index=windows source="WinEventLog:security" sourcetype="WinEventLog:Security" EventCode=4625 Sub_Status=0xC0000064 | eval Date=strftime(_time, "%Y/%m/%d") | rex "Which\sLogon\sFailed:\s+Security\sID:\s+\S.*\s+\w+\s\w+\S\s.(?<uacct>\S.*)" | stats count by Date, uacct, host | rename count as "Attempts" | sort - Attempts`,
+	},
+	// Complex nested boolean
+	{
+		name:  "complex_nested_boolean",
+		query: `index=main ((a=1 AND b=2) OR (c=3 AND d=4)) AND ((e=5 OR f=6) AND (g=7 OR h=8)) | stats count by a b c d e f g h`,
+	},
+	// Long IN list
+	{
+		name:  "long_in_list",
+		query: `index=firewall dest_port IN (20, 21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 443, 445, 465, 587, 993, 995, 1433, 1521, 3306, 3389, 5432, 5900, 8080, 8443) | stats count by src_ip dest_ip dest_port`,
+	},
+	// Many OR conditions
+	{
+		name:  "many_or_conditions",
+		query: `EventCode=4624 OR EventCode=4625 OR EventCode=4634 OR EventCode=4647 OR EventCode=4648 OR EventCode=4672 OR EventCode=4720 OR EventCode=4722 OR EventCode=4723 OR EventCode=4724 | stats count by EventCode`,
+	},
+	// Complex eval chain
+	{
+		name:  "complex_eval_chain",
+		query: `index=web | eval response_time=round(response_time_ms/1000, 2) | eval status_category=case(status<300, "success", status<400, "redirect", status<500, "client_error", true(), "server_error") | eval is_slow=if(response_time>5, "yes", "no") | stats avg(response_time) as avg_time count by status_category is_slow`,
+	},
+	// Multivalue expansion
+	{
+		name:  "multivalue_expansion",
+		query: `index=proxy | makemv delim="," categories | mvexpand categories | stats count by categories | sort - count | head 20`,
+	},
+	// Coalesce fields
+	{
+		name:  "coalesce_fields",
+		query: `index=proxy | eval client=coalesce(c_ip, cs_client_ip, src_ip) | stats count by client | where count > 1000`,
+	},
+	// Special characters in path
+	{
+		name:  "special_chars_path",
+		query: `index=sysmon EventCode=1 Image="C:\\Windows\\System32\\cmd.exe" | where match(CommandLine, "(?i)[&|><^]") | table _time ComputerName User CommandLine`,
+	},
+	// Rex with multiple capture groups
+	{
+		name:  "rex_multiple_captures",
+		query: `index=web sourcetype=access_combined | rex field=_raw "(?<client_ip>\d+\.\d+\.\d+\.\d+)\s+-\s+-\s+\[(?<timestamp>[^\]]+)\]\s+\"(?<method>\w+)\s+(?<uri>[^\s]+)\s+(?<protocol>[^\"]+)\"\s+(?<status>\d+)\s+(?<bytes>\d+)" | table client_ip timestamp method uri status bytes`,
+	},
+	// Streamstats for session tracking
+	{
+		name:  "streamstats_session",
+		query: `index=web | sort 0 _time | streamstats current=f last(uri) as prev_uri by session_id | eval is_new_session=if(isnull(prev_uri), 1, 0) | stats sum(is_new_session) as sessions count as pageviews by session_id`,
+	},
+	// Eventstats for baseline comparison
+	{
+		name:  "eventstats_baseline",
+		query: `index=firewall action=blocked | stats count as block_count by src_ip | eventstats avg(block_count) as avg_blocks stdev(block_count) as stdev_blocks | eval zscore=(block_count-avg_blocks)/stdev_blocks | where zscore > 3`,
+	},
+	// Splunk Security Content - Process injection detection
+	{
+		name:  "splunk_process_injection",
+		query: "`sysmon` EventCode=8 TargetImage = \"*.exe\" AND NOT(SourceImage IN(\"C:\\\\Windows\\\\*\", \"C:\\\\Program File*\", \"%systemroot%\\\\*\")) | stats count min(_time) as firstTime max(_time) as lastTime by EventID Guid NewThreadId ProcessID SecurityID SourceImage SourceProcessGuid SourceProcessId StartAddress StartFunction StartModule TargetImage TargetProcessGuid TargetProcessId UserID dest",
+	},
+	// Splunk Security Content - MSHTA spawn
+	{
+		name:  "splunk_mshta_spawn",
+		query: "| tstats count values(Processes.process_name) as process_name values(Processes.process) as process min(_time) as firstTime max(_time) as lastTime from datamodel=Endpoint.Processes where (Processes.parent_process_name=svchost.exe OR Processes.parent_process_name=wmiprvse.exe) by Processes.dest Processes.parent_process Processes.user",
+	},
+	// MITRE ATT&CK T1053 - Scheduled Task
+	{
+		name:  "mitre_scheduled_task",
+		query: `index=windows sourcetype=WinEventLog:Security EventCode=4698 | rex field=Task_Content "(?<command><Command>.*</Command>)" | table _time ComputerName SubjectUserName TaskName command`,
+	},
+	// MITRE ATT&CK T1003 - Credential Dumping
+	{
+		name:  "mitre_credential_dump",
+		query: `index=sysmon EventCode=10 TargetImage="*\\lsass.exe" | stats count by SourceImage SourceUser Computer | where count > 1`,
+	},
+	// MITRE ATT&CK T1059 - Command and Scripting
+	{
+		name:  "mitre_command_scripting",
+		query: `index=windows EventCode=4688 (New_Process_Name="*\\cmd.exe" OR New_Process_Name="*\\powershell.exe" OR New_Process_Name="*\\wscript.exe" OR New_Process_Name="*\\cscript.exe") | stats count by Account_Name Creator_Process_Name New_Process_Name Process_Command_Line`,
+	},
+	// Advanced subsearch with append
+	{
+		name:  "advanced_subsearch_append",
+		query: `index=main action=failed | stats count by user | append [search index=main action=success | stats count by user] | stats sum(count) as total_count by user`,
+	},
+	// Fillnull command
+	{
+		name:  "fillnull_command",
+		query: `index=web | stats count by status user | fillnull value=0 count | where count < 10`,
+	},
+	// Spath JSON extraction
+	{
+		name:  "spath_json",
+		query: `index=json_logs | spath path=event.user output=username | spath path=event.action output=action | stats count by username action`,
+	},
+	// Transaction with maxspan
+	{
+		name:  "transaction_maxspan",
+		query: `index=web | transaction session_id maxspan=30m maxpause=5m | stats avg(duration) as avg_session_duration by user`,
+	},
+	// Multiple rename operations
+	{
+		name:  "multiple_renames",
+		query: `index=main | rename src_ip as "Source IP", dest_ip as "Destination IP", action as "Action Taken" | table "Source IP" "Destination IP" "Action Taken"`,
+	},
+	// Lookup with output fields
+	{
+		name:  "lookup_output",
+		query: `index=firewall | lookup geo_lookup ip as src_ip OUTPUT country city latitude longitude | stats count by country city`,
+	},
+	// Complex timechart
+	{
+		name:  "complex_timechart",
+		query: `index=web | timechart span=1h count by status usenull=f limit=10 | addtotals`,
+	},
+	// Regex with multiple captures
+	{
+		name:  "regex_multi_capture",
+		query: `index=proxy | rex field=url "https?://(?<domain>[^/]+)(?<path>/[^?]*)(\?(?<query>.*))?$" | stats count by domain path`,
+	},
+	// Eventstats with multiple aggregations
+	{
+		name:  "eventstats_multi_agg",
+		query: `index=web | eventstats avg(response_time) as avg_time median(response_time) as median_time p95(response_time) as p95_time by endpoint | where response_time > p95_time`,
+	},
+	// Bin with span time
+	{
+		name:  "bin_span_time",
+		query: `index=metrics | bin _time span=5m | stats avg(cpu_usage) as avg_cpu max(cpu_usage) as max_cpu by _time host`,
+	},
+	// Format command
+	{
+		name:  "format_command",
+		query: `index=main status=error | format maxresults=100 | outputlookup error_summary.csv`,
+	},
+	// Makemv with delimiters
+	{
+		name:  "makemv_delim",
+		query: `index=logs | makemv delim="," tags | mvexpand tags | stats count by tags | sort - count`,
+	},
+	// Dedup with sortby
+	{
+		name:  "dedup_sortby",
+		query: `index=events | dedup 5 user sortby -_time | table _time user action`,
+	},
+	// Chart over time
+	{
+		name:  "chart_over",
+		query: `index=sales | chart sum(revenue) over region by product_category | addtotals col=t`,
+	},
+	// Rare command
+	{
+		name:  "rare_command",
+		query: `index=dns | rare limit=20 query_type by src_ip | where count < 5`,
+	},
+	// Top with countfield
+	{
+		name:  "top_countfield",
+		query: `index=web | top limit=10 useother=t countfield=requests showperc=f uri by status`,
+	},
+	// Complex boolean with NOT IN
+	{
+		name:  "complex_boolean_not_in",
+		query: `index=sysmon EventCode=1 NOT (Image IN ("C:\\Windows\\System32\\*", "C:\\Windows\\SysWOW64\\*")) AND (CommandLine="*-enc*" OR CommandLine="*-encoded*") | stats count by Image CommandLine`,
+	},
+	// Streamstats with window
+	{
+		name:  "streamstats_window",
+		query: `index=metrics | sort 0 _time | streamstats window=10 avg(value) as rolling_avg current=f by host | eval deviation=abs(value-rolling_avg) | where deviation > 2`,
+	},
+	// Bucket with bins
+	{
+		name:  "bucket_bins",
+		query: `index=web | bucket response_time bins=10 | stats count by response_time | sort response_time`,
+	},
+	// tstats with datamodel - Endpoint processes
+	{
+		name:  "tstats_endpoint_processes",
+		query: `| tstats summariesonly=t values(Processes.process) from datamodel=Endpoint.Processes groupby Processes.process_current_directory`,
+	},
+	// tstats with datamodel - Web proxy
+	{
+		name:  "tstats_web_proxy",
+		query: `| tstats sum(Web.bytes_out) as bytes from datamodel=Web where (nodename=Web.Proxy) (Web.category="Personal Network Storage") by Web.user Web.dest_nt_host | rename Web.user as user | sort 10 -bytes`,
+	},
+	// tstats with datamodel - Network Traffic
+	{
+		name:  "tstats_network_traffic",
+		query: `| tstats summariesonly=t count from datamodel=Network_Traffic where * by All_Traffic.dest All_Traffic.src | sort - count`,
+	},
+	// tstats with datamodel - Authentication
+	{
+		name:  "tstats_authentication",
+		query: `| tstats count from datamodel=Authentication by Authentication.src Authentication.action | stats sum(count) as total by Authentication.src`,
+	},
+	// tstats with where clause and time
+	{
+		name:  "tstats_where_time",
+		query: `| tstats count where index=main earliest=-24h latest=now by _time span=1h host | timechart span=1h sum(count) by host`,
+	},
+	// Complex eval with case
+	{
+		name:  "complex_eval_case",
+		query: `index=web | eval severity=case(status>=500, "critical", status>=400, "warning", status>=300, "info", true(), "ok") | stats count by severity`,
+	},
+	// Multisearch
+	{
+		name:  "multisearch",
+		query: `| multisearch [search index=web status>=500] [search index=web status>=400 status<500] | stats count by index status`,
+	},
+	// Map command
+	{
+		name:  "map_command",
+		query: `index=main | stats count by user | map search="search index=audit user=$user$" maxsearches=10`,
+	},
+	// Inputlookup with where
+	{
+		name:  "inputlookup_where",
+		query: `| inputlookup threat_intel.csv where threat_score>80 | table indicator threat_type threat_score`,
+	},
+	// Outputlookup
+	{
+		name:  "outputlookup",
+		query: `index=firewall action=blocked | stats count by src_ip | where count>100 | outputlookup blocked_ips.csv`,
+	},
+	// Gentimes for date ranges
+	{
+		name:  "gentimes_daterange",
+		query: `| gentimes start=-30 | eval date=strftime(starttime, "%Y-%m-%d") | table date`,
+	},
+	// Return command for subsearch
+	{
+		name:  "return_subsearch",
+		query: `index=main [search index=threats | return 100 ioc] | stats count by src_ip`,
+	},
+	// Foreach command
+	{
+		name:  "foreach_command",
+		query: `index=metrics | stats avg(cpu) as cpu avg(memory) as memory by host | foreach cpu memory [eval <<FIELD>>_pct=round(<<FIELD>>*100, 2)]`,
+	},
+	// Accum command
+	{
+		name:  "accum_command",
+		query: `index=sales | sort _time | accum revenue as running_total | table _time revenue running_total`,
+	},
+	// Autoregress
+	{
+		name:  "autoregress",
+		query: `index=metrics | sort _time | autoregress value as prev_value p=1 | eval change=value-prev_value | where change>10`,
+	},
+	// Cluster command
+	{
+		name:  "cluster_command",
+		query: `index=errors | cluster showcount=t | sort - cluster_count | head 10`,
+	},
+	// Kmeans
+	{
+		name:  "kmeans_command",
+		query: `index=metrics | stats avg(cpu) avg(memory) by host | kmeans k=3 | stats count by cluster`,
+	},
+	// Anomalydetection
+	{
+		name:  "anomalydetection",
+		query: `index=metrics | timechart span=1h avg(value) as value | anomalydetection value method=zscore threshold=3`,
+	},
+	// Predict command
+	{
+		name:  "predict_command",
+		query: `index=metrics | timechart span=1d avg(value) as value | predict value future_timespan=7`,
+	},
+	// Trendline
+	{
+		name:  "trendline_command",
+		query: `index=web | timechart span=1h count | trendline sma5(count) as trend`,
+	},
+	// Xyseries
+	{
+		name:  "xyseries_command",
+		query: `index=sales | stats sum(revenue) by product month | xyseries month product revenue`,
+	},
+	// Untable
+	{
+		name:  "untable_command",
+		query: `index=metrics | stats avg(cpu) avg(memory) avg(disk) by host | untable host metric value`,
+	},
+	// Transpose
+	{
+		name:  "transpose_command",
+		query: `index=summary | stats count by category status | transpose 0 column_name=status header_field=category`,
+	},
+	// === Splunk Security Content Queries ===
+	// 7zip to SMB share path
+	{
+		name:  "7zip_smb_share",
+		query: `| tstats count min(_time) as firstTime max(_time) as lastTime from datamodel=Endpoint.Processes where (Processes.process_name="7z.exe" OR Processes.process_name="7za.exe") AND (Processes.process="*\\C$\\*" OR Processes.process="*\\Admin$\\*") by Processes.dest Processes.user Processes.process_name Processes.process`,
+	},
+	// LSASS memory dump detection
+	{
+		name:  "lsass_memory_dump",
+		query: `index=sysmon EventCode=10 TargetImage=*lsass.exe CallTrace=*dbgcore.dll* OR CallTrace=*dbghelp.dll* | stats count min(_time) as firstTime max(_time) as lastTime by CallTrace GrantedAccess SourceImage TargetImage dest`,
+	},
+	// Active Directory lateral movement risk
+	{
+		name:  "ad_lateral_movement_risk",
+		query: `| tstats count min(_time) as firstTime max(_time) as lastTime sum(All_Risk.calculated_risk_score) as risk_score values(All_Risk.tag) as tag values(source) as source dc(source) as source_count from datamodel=Risk.All_Risk where All_Risk.risk_object_type="system" by All_Risk.risk_object All_Risk.risk_object_type | where source_count>=4`,
+	},
+	// Active Setup registry autostart
+	{
+		name:  "active_setup_registry",
+		query: `| tstats count min(_time) as firstTime max(_time) as lastTime FROM datamodel=Endpoint.Registry WHERE Registry.registry_value_name="StubPath" Registry.registry_path="*\\SOFTWARE\\Microsoft\\Active Setup\\Installed Components*" by Registry.dest Registry.process_id Registry.registry_path Registry.registry_value_name Registry.registry_value_data Registry.user`,
+	},
+	// Windows Defender exclusion
+	{
+		name:  "defender_exclusion",
+		query: `| tstats count min(_time) as firstTime max(_time) as lastTime from datamodel=Endpoint.Processes where (Processes.process="*Add-MpPreference*" OR Processes.process="*Set-MpPreference*") Processes.process IN ("*-Exclusion*", "*-ControlledFolderAccessAllowedApplications*") by Processes.dest Processes.user Processes.process_name Processes.process`,
+	},
+	// ADSISearcher account discovery
+	{
+		name:  "adsisearcher_discovery",
+		query: `index=powershell EventCode=4104 ScriptBlockText="*[adsisearcher]*" ScriptBlockText="*objectcategory=user*" ScriptBlockText="*.findAll()*" | fillnull | stats count min(_time) as firstTime max(_time) as lastTime by dest user ScriptBlockText`,
+	},
+	// Firewall inbound traffic allowance
+	{
+		name:  "firewall_inbound_allow",
+		query: `| tstats count min(_time) as firstTime max(_time) as lastTime FROM datamodel=Endpoint.Registry WHERE Registry.registry_path="*\\System\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\FirewallRules\\*" Registry.registry_value_data="*|Action=Allow|*" Registry.registry_value_data="*|Dir=In|*" by Registry.dest Registry.registry_path Registry.registry_value_data Registry.user`,
+	},
+	// Attacker tools detection with inputlookup
+	{
+		name:  "attacker_tools_inputlookup",
+		query: `| tstats count min(_time) as firstTime max(_time) as lastTime values(Processes.process) as process from datamodel=Endpoint.Processes where [| inputlookup attacker_tools | rename attacker_tool_names AS Processes.process_name | fields Processes.process_name] AND Processes.dest!=unknown by Processes.dest Processes.process_name Processes.user`,
+	},
+	// Batch file write to system32
+	{
+		name:  "batch_file_system32",
+		query: `| tstats count min(_time) as firstTime max(_time) as lastTime FROM datamodel=Endpoint.Filesystem where Filesystem.file_path IN ("*\\system32\\*", "*\\syswow64\\*") Filesystem.file_name="*.bat" by Filesystem.dest Filesystem.file_name Filesystem.file_path Filesystem.user`,
+	},
+	// BCDEdit safeboot deletion
+	{
+		name:  "bcdedit_safeboot",
+		query: `| tstats count min(_time) as firstTime max(_time) as lastTime from datamodel=Endpoint.Processes where Processes.process_name=bcdedit.exe Processes.process="*/deletevalue*" Processes.process="*{current}*" Processes.process="*safeboot*" by Processes.dest Processes.user Processes.process_name Processes.process`,
+	},
+	// === ThreatHunting Queries ===
+	// Indicator removal on host
+	{
+		name:  "indicator_removal",
+		query: `index=sysmon event_id=1 OR index=windows event_id=4688 (process_name="wevtutil.exe" OR process_command_line="*wevtutil* cl*")`,
+	},
+	// Registry modification
+	{
+		name:  "registry_modification_hunt",
+		query: `index=sysmon event_id=1 OR index=windows event_id=4688 (process_name="reg.exe" AND process_command_line!="*query*")`,
+	},
+	// Network share discovery
+	{
+		name:  "network_share_discovery",
+		query: `index=sysmon event_id=3 process_name="net.exe" AND (process_command_line="*net* view*" OR process_command_line="*net* share*")`,
+	},
+	// RDP network detection
+	{
+		name:  "rdp_network",
+		query: `index=sysmon event_id=3 (process_path="*\\tscon.exe" OR process_name="mstsc.exe") OR dst_port=3389 initiated=true`,
+	},
+	// WMI process execution
+	{
+		name:  "wmi_process",
+		query: `index=sysmon event_id=1 OR index=windows event_id=4688 (process_parent_path="*\\wmiprvse.exe" OR process_name="wmic.exe" OR process_command_line="*wmic*")`,
+	},
+	// Pass the Hash NULL SID
+	{
+		name:  "pass_the_hash_null_sid",
+		query: `index=windows event_id=4624 AND ((Security_ID="NULL SID" OR Security_ID="S-1-0-0") AND Logon_Type="3" AND Source_Network_Address!="*::1*" AND Logon_Process="*NtLmSsp" AND Key_Length="0")`,
+	},
+	// Scheduled task file access
+	{
+		name:  "scheduled_task_fileaccess",
+		query: `index=sysmon event_id=11 process_path!="C:\\WINDOWS\\system32\\svchost.exe" (file_path="C:\\Windows\\System32\\Tasks\\*" OR file_path="C:\\Windows\\Tasks\\*")`,
+	},
+	// UAC bypass via eventvwr
+	{
+		name:  "uac_bypass_eventvwr",
+		query: `index=sysmon event_id=1 OR index=windows event_id=4688 (process_parent_path="*\\eventvwr.exe" OR process_parent_path="*\\fodhelper.exe")`,
+	},
+	// Rundll32 execution
+	{
+		name:  "rundll32_execution",
+		query: `index=sysmon event_id=1 OR index=windows event_id=4688 (process_parent_path="*\\rundll32.exe" OR process_name="rundll32.exe")`,
+	},
+	// BITS job network
+	{
+		name:  "bits_job_network",
+		query: `index=sysmon event_id=3 process_name="bitsadmin.exe"`,
+	},
+	// Sysmon configuration change
+	{
+		name:  "sysmon_config_change",
+		query: `index=sysmon event_id=16 NOT [| inputlookup trusted_sysmon_configs.csv | fields hash_sha1]`,
+	},
+	// Outbound connections from suspicious paths
+	{
+		name:  "outbound_suspicious_path",
+		query: `index=sysmon event_id=3 (process_path="C:\\Users\\*" OR process_path="C:\\ProgramData\\*" OR process_path="C:\\Windows\\Temp\\*") initiated=true`,
+	},
+	// Multisearch for service state
+	{
+		name:  "multisearch_service_state",
+		query: `| multisearch [search index=sysmon event_id=4 State!=Started | fields _time host service_state] [search index=windows event_id=7036 Message="*Sysmon*"]`,
+	},
+	// Print monitor registry
+	{
+		name:  "print_monitor_registry",
+		query: `index=sysmon (event_id=12 OR event_id=13 OR event_id=14) registry_key_path="*\\SYSTEM\\CurrentControlSet\\Control\\Print\\Monitors\\*"`,
+	},
+	// AppInit DLLs registry
+	{
+		name:  "appinit_dlls_registry",
+		query: `index=sysmon (event_id=12 OR event_id=13 OR event_id=14) (registry_key_path="*\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows\\Appinit_Dlls\\*" OR registry_key_path="*\\SOFTWARE\\Wow6432Node\\Microsoft\\Windows NT\\CurrentVersion\\Windows\\Appinit_Dlls\\*")`,
+	},
+	// InstallUtil execution
+	{
+		name:  "installutil_execution",
+		query: `index=sysmon event_id=1 OR index=windows event_id=4688 (process_name="InstallUtil.exe" OR process_command_line="*/logfile= /LogToConsole=false /U*")`,
+	},
+	// COM object hijacking
+	{
+		name:  "com_object_hijacking",
+		query: `index=sysmon (event_id=12 OR event_id=13 OR event_id=14) registry_key_path="*\\Software\\Classes\\CLSID\\*"`,
+	},
+	// Application shim database
+	{
+		name:  "app_shim_database",
+		query: `index=sysmon event_id=11 file_path="C:\\Windows\\AppPatch\\Custom\\*"`,
+	},
+	// Control panel items
+	{
+		name:  "control_panel_items",
+		query: `index=sysmon event_id=1 OR index=windows event_id=4688 (process_command_line="*control* /name*" OR process_command_line="rundll32* shell32.dll,Control_RunDLL")`,
+	},
+	// Accessibility features persistence
+	{
+		name:  "accessibility_persistence",
+		query: `index=sysmon event_id=1 process_parent_name="winlogon.exe" (process_name="sethc.exe" OR process_name="utilman.exe" OR process_name="osk.exe" OR process_name="magnify.exe" OR process_name="narrator.exe")`,
+	},
+	// RegSvr32 network activity
+	{
+		name:  "regsvr32_network",
+		query: `index=sysmon event_id=3 (process_parent_path="*\\regsvr32.exe" OR process_path="*\\regsvr32.exe")`,
+	},
+	// Time providers registry
+	{
+		name:  "time_providers_registry",
+		query: `index=sysmon (event_id=12 OR event_id=13 OR event_id=14) registry_key_path="*\\System\\CurrentControlSet\\Services\\W32Time\\TimeProviders\\*"`,
+	},
+	// Terminal services registry
+	{
+		name:  "terminal_services_registry",
+		query: `index=sysmon (event_id=12 OR event_id=13 OR event_id=14) (process_path="C:\\Windows\\system32\\LogonUI.exe" OR registry_key_path="*\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services\\*")`,
+	},
+	// WMI ActiveScript consumer
+	{
+		name:  "wmi_activescript",
+		query: `index=sysmon event_id=1 OR index=windows event_id=4688 process_parent_path="C:\\Windows\\System32\\svchost.exe" AND process_path="C:\\WINDOWS\\system32\\wbem\\scrcons.exe"`,
+	},
+	// Password policy discovery
+	{
+		name:  "password_policy_discovery",
+		query: `index=sysmon event_id=1 OR index=windows event_id=4688 (process_command_line="*net* accounts*" OR process_command_line="*net* accounts /domain*")`,
+	},
+	// Session manager AppCertDlls
+	{
+		name:  "appcertdlls_registry",
+		query: `index=sysmon (event_id=12 OR event_id=13 OR event_id=14) registry_key_path="*\\System\\CurrentControlSet\\Control\\Session Manager\\AppCertDlls\\*"`,
+	},
+	// Forced authentication via files
+	{
+		name:  "forced_auth_files",
+		query: `index=sysmon event_id=11 (file_path="*.lnk" OR file_path="*.scf")`,
+	},
+	// Credentials in registry
+	{
+		name:  "credentials_in_registry",
+		query: `index=sysmon event_id=1 OR index=windows event_id=4688 (process_command_line="*reg* query HKLM /f password /t REG_SZ /s*" OR process_command_line="*Get-CachedGPPPassword*" OR process_command_line="*Get-RegistryAutoLogon*")`,
+	},
+	// Windows admin shares
+	{
+		name:  "windows_admin_shares",
+		query: `index=sysmon event_id=3 process_name="net.exe" AND (process_command_line="*net* use*$" OR process_command_line="*net* session*$")`,
+	},
+	// Process discovery
+	{
+		name:  "process_discovery_hunt",
+		query: `index=sysmon event_id=1 OR index=windows event_id=4688 process_name="tasklist.exe" OR process_command_line="*Get-Process*"`,
+	},
+	// Remote session enumeration
+	{
+		name:  "remote_session_enum",
+		query: `index=sysmon event_id=1 OR index=windows event_id=4688 process_name="qwinsta.exe"`,
+	},
+	// System network config discovery
+	{
+		name:  "network_config_discovery",
+		query: `index=sysmon event_id=1 OR index=windows event_id=4688 (process_name="net.exe" AND process_command_line="*net* config*") OR (process_name="ipconfig.exe" OR process_name="netsh.exe" OR process_name="arp.exe" OR process_name="nbtstat.exe")`,
+	},
+	// === MrM8BRH Collection - Splunk Admin Queries ===
+	// REST API saved searches
+	{
+		name:  "rest_saved_searches",
+		query: `| rest /servicesNS/-/-/saved/searches splunk_server=local | table title search`,
+	},
+	// REST API alerts
+	{
+		name:  "rest_alerts",
+		query: `| rest /servicesNS/-/-/saved/searches | search alert.track=1 | fields title description search disabled triggered_alert_count actions alert.severity cron_schedule`,
+	},
+	// Indexes with sourcetypes join
+	{
+		name:  "indexes_sourcetypes_join",
+		query: `| rest /services/data/indexes | rename title AS index | join type=left index [| tstats count WHERE index=* BY index sourcetype | stats values(sourcetype) AS sourcetypes BY index] | fillnull value="No sourcetypes" sourcetypes | where sourcetypes!="No sourcetypes" | eval sourcetypes=mvjoin(sourcetypes, ", ") | sort index | table index sourcetypes`,
+	},
+	// Metadata hosts
+	{
+		name:  "metadata_hosts",
+		query: `| metadata type=hosts index=* | eval firstTime=strftime(firstTime, "%Y-%m-%d %H:%M:%S"), lastTime=strftime(lastTime, "%Y-%m-%d %H:%M:%S") | table host totalCount firstTime lastTime | sort -totalCount`,
+	},
+	// Sourcetypes in indexes with convert
+	{
+		name:  "sourcetypes_convert",
+		query: `| tstats count as totalCount min(_time) as start_date max(_time) as end_date max(_indextime) as recent_date dc(host) as hosts where index=* sourcetype=* by index sourcetype | convert timeformat="%Y/%m/%d %H:%M:%S" ctime(start_date) | convert timeformat="%Y/%m/%d %H:%M:%S" ctime(end_date) | table index sourcetype start_date end_date recent_date hosts totalCount`,
+	},
+	// Orphaned scheduled searches
+	{
+		name:  "orphaned_searches",
+		query: `| rest timeout=600 splunk_server=local /servicesNS/-/-/saved/searches add_orphan_field=yes count=0 | search orphan=1 disabled=0 is_scheduled=1 | eval status=if(disabled=0, "enabled", "disabled") | fields title orphan status is_scheduled cron_schedule`,
+	},
+	// Truncation issues with rex
+	{
+		name:  "truncation_rex",
+		query: `index=_internal sourcetype=splunkd source="*splunkd.log" log_level="WARN" "Truncating" | rex "line length >= (?<line_length>\\d+)" | stats values(host) as host count last(_raw) as common_events max(line_length) as max_line_length by data_sourcetype log_level | table host data_sourcetype log_level max_line_length count`,
+	},
+	// Missing forwarders
+	{
+		name:  "missing_forwarders",
+		query: `| REST /services/deployment/server/clients | eval difInSec=now()-lastPhoneHomeTime | eval time=strftime(lastPhoneHomeTime, "%Y-%m-%d %H:%M:%S") | search difInSec>900 | table hostname ip time`,
+	},
+	// No data agents
+	{
+		name:  "no_data_agents",
+		query: `| tstats latest(_time) as latest where index=* earliest=-4d by host index sourcetype | eval recent=if(latest>relative_time(now(), "-360m"), "1", "0"), LastReceiptTime=strftime(latest, "%c") | where recent=0 | sort LastReceiptTime | eval age=now()-latest | eval age=round((age/60/60), 1) | fields - recent latest`,
+	},
+	// Datamodel sourcetype coverage
+	{
+		name:  "datamodel_coverage",
+		query: `| tstats count WHERE index=* NOT index IN (sum_*, *summary, cim_*) by sourcetype | fields - count | append [| datamodel | rex field=_raw "\"modelName\"\\s*\\:\\s*\"(?<modelName>[^\"]+)\"" | fields modelName | table modelName] | fillnull value="placeholder" modelName | table modelName sourcetype count`,
+	},
+	// === Active Directory Queries ===
+	// AD group membership changes
+	{
+		name:  "ad_group_changes",
+		query: `index=wineventlog source="WinEventLog:Security" (EventCode=4728 OR EventCode=4729) Group_Name="*" | eval time=strftime(_time, "%Y-%m-%d %H:%M:%S") | rename time AS Time src_user AS "Actioned By" user AS User name as "Action Taken" Group_Name AS "Group Name" | table Time "Actioned By" User "Action Taken" "Group Name"`,
+	},
+	// AD console logins
+	{
+		name:  "ad_console_logins",
+		query: `index=wineventlog source="WinEventLog:Security" EventCode=4624 Logon_Type=2 | eval time=strftime(_time, "%Y-%m-%d %H:%M:%S") | rename time AS Time host AS Host user AS User dvc AS Device action AS Action | table Time Host User Device Action | dedup Time Host User Device Action`,
+	},
+	// AD RDP connections with CASE
+	{
+		name:  "ad_rdp_case",
+		query: `index=wineventlog source="WinEventLog:Security" Logon_Type=10 ((EventCode=4624 OR EventCode=528) OR (EventCode=4625 OR EventCode=529)) | eval action=CASE(EventCode=4624 OR EventCode=528, "Success", EventCode=4625 OR EventCode=529, "Failure") | eval time=strftime(_time, "%Y-%m-%d %H:%M:%S") | table time user src_user src_ip dest action`,
+	},
+	// AD daily domain activities
+	{
+		name:  "ad_daily_activities",
+		query: `index=wineventlog source=WinEventLog:Security src_nt_domain!="NT AUTHORITY" EventCode=4720 OR EventCode=4726 OR EventCode=4738 OR EventCode=4767 | rex field=member_id "^\\w+\\W(?<ITS_Admin>\\w*\\s\\w*\\s\\w*|\\w+_\\w+|\\w*\\s\\w*|\\w*)(\\s\\w+\\W|\\s)(?<Target_Account>.*\\S)" | table _time EventCode src_nt_domain ITS_Admin Target_Account msad_action Group_Name`,
+	},
+	// AD suspicious activity
+	{
+		name:  "ad_suspicious_activity",
+		query: `index=wineventlog source="WinEventLog:Security" Account_Name!="SplunkForwarder" EventCode=4688 NOT (Account_Name=*$) (cmd.exe OR powershell.exe OR wmic.exe OR psexec.exe OR mimikatz.exe OR net.exe OR reg.exe OR schtasks.exe) | eval Message=split(Message, ".") | eval Short_Message=mvindex(Message, 0) | table _time host Account_Name New_Process_Name Short_Message`,
+	},
+	// AD accounts deleted within 24h of creation
+	{
+		name:  "ad_accounts_deleted_24h",
+		query: `index=wineventlog source=WinEventLog:Security (EventCode=4726 OR EventCode=4720) | eval Date=strftime(_time, "%Y/%m/%d") | rex "Subject:\\s+\\w+\\s\\S+\\s+\\S+\\s+\\w+\\s\\w+:\\s+(?<SourceAccount>\\S+)" | rex "Target\\s\\w+:\\s+\\w+\\s\\w+:\\s+\\S+\\s+\\w+\\s\\w+:\\s+(?<DeletedAccount>\\S+)" | transaction SuspectAccount startswith="EventCode=4720" endswith="EventCode=4726" | eval duration=round(((duration/60)/60)/24, 2) | table Date index host SourceAccount SuspectAccount duration`,
+	},
+	// AD user session duration
+	{
+		name:  "ad_session_duration",
+		query: `index=wineventlog source=WinEventLog:Security (EventCode=4624 OR EventCode=4634) (Logon_Type=2 OR Logon_Type=10) | eval Date=strftime(_time, "%Y/%m/%d") | eval LogonType=case(Logon_Type="2", "Local Console Access", Logon_Type="10", "Remote Desktop") | transaction host user startswith=EventCode=4624 endswith=EventCode=4634 | where duration>5 | eval duration=duration/60 | table host user LogonType duration Date`,
+	},
+	// === Linux Queries ===
+	// Linux SSH logins with join
+	{
+		name:  "linux_ssh_join",
+		query: `index=linux sourcetype="linux_secure" ("Accepted Publickey" OR "session opened" OR "Accepted password") app!="" src!="PAM_IP_ADDR" | table _time host user_name app action src src_port dest | eval dest_short=replace(dest, "\\..*$", "") | join type=left dest_short [search index=assets | stats values(ip) as ip by host_short | rename host_short as dest_short]`,
+	},
+	// Linux repeated failed logins
+	{
+		name:  "linux_failed_logins",
+		query: `index=linux sourcetype=linux_secure | eval Date=strftime(_time, "%Y/%m/%d") | rex ".*:\\d{2}\\s(?<hostname>\\S+)" | rex "gdm\\S+\\sauthentication\\s(?<status>\\w+)" | rex "\\suser[^'](?<User>\\S+\\w+)" | search status=failure | stats count as fails by Date User hostname | eval "Alert Level"=case(fails>=50, "Critical", fails<50 AND fails>=20, "Warning", fails<20, "Normal")`,
+	},
+	// === CrowdStrike Queries ===
+	// CrowdStrike malware detections
+	{
+		name:  "crowdstrike_malware",
+		query: `index=crowdstrike "metadata.eventType"=DetectionSummaryEvent metadata.customerIDString=* event.DetectId!="" | table _time action description event.ComputerName event.DetectName event.FileName event.FilePath event.IOCType event.IOCValue event.LocalIP event.SeverityName event.Tactic event.Technique event.UserName event.CommandLine`,
+	},
+	// CrowdStrike devices with spath
+	{
+		name:  "crowdstrike_devices_spath",
+		query: `index=crowdstrike sourcetype="crowdstrike:device:json" | spath input=_raw path=falcon_device.device_id output=device_id | spath input=_raw path=falcon_device.hostname output=hostname | spath input=_raw path=falcon_device.platform_name output=platform_name | spath input=_raw path=falcon_device.local_ip output=local_ip | table device_id hostname platform_name local_ip | dedup device_id`,
+	},
+	// === F5 Queries ===
+	// F5 blocked attacks
+	{
+		name:  "f5_blocked_attacks",
+		query: `index=netwaf severity="Critical" OR severity="High" OR severity="Medium" AND request_status="blocked" | table _time attack_type dest_port method policy_name request_status geo_location severity sig_cves uri x_forwarded_for_header_value`,
+	},
+	// F5 multi-severity attacks
+	{
+		name:  "f5_multi_severity",
+		query: `index=netwaf | search attack_type="*SQL*" OR attack_type="*XSS*" OR attack_type="*CSRF*" OR attack_type="*SSRF*" OR attack_type="*Path Traversal*" OR attack_type="*Command Execution*" | search severity="Critical" OR severity="High" OR severity="Medium" | table _time attack_type severity uri response`,
+	},
+	// === Cisco Queries ===
+	// Cisco Umbrella DNS
+	{
+		name:  "cisco_umbrella_dns",
+		query: `index=cisco_umbrella | table _time user action ReplyCode RecordType category domain granular_identity_type identities identity_type src src_translated_ip`,
+	},
+	// Cisco FMC blocked files
+	{
+		name:  "cisco_fmc_blocked",
+		query: `index=cisco_secure_fw file action=Block | table _time AC_RuleAction Application FirewallPolicy FirewallRule InitiatorIP ResponderIP URL URL_Category`,
+	},
+	// === Office365 Queries ===
+	// Office365 attachment policy
+	{
+		name:  "o365_attachment_policy",
+		query: `index=office365 | search "Parameters{}.Value"="Change_Me!" | table _time UserId "Parameters{}.Name" "Parameters{}.Value" | rename UserId as "Modified by"`,
+	},
+	// === Advanced SPL Patterns ===
+	// Credit card detection with Luhn
+	{
+		name:  "credit_card_luhn",
+		query: `index=* (source IN ("*.log", "*.bak", "*.txt", "*.csv")) | rex max_match=1 "[\"\\s\\'\\,]{0,1}(?<CCMatch>[\\d.\\-\\s]{11,24})[\"\\s\\'\\,]{0,1}" | where isnotnull(CCMatch) | eval cc=tonumber(replace(CCMatch, "[ -\\.]", "")) | where len(cc)>=14 AND len(cc)<=16 | table _time CCMatch source sourcetype host`,
+	},
+	// Modular input status
+	{
+		name:  "modular_input_status",
+		query: `| rest /services/admin/inputstatus/ModularInputs:modular%20input%20commands splunk_server=local count=0 | append [| rest /services/admin/inputstatus/ExecProcessor:exec%20commands splunk_server=local count=0] | fields inputs* | transpose`,
+	},
+	// Index retention with outer join
+	{
+		name:  "index_retention_join",
+		query: `| rest splunk_server=splunk-idx01 /services/data/indexes | join type=outer title [| rest splunk_server=splunk-idx01 /services/data/indexes-extended] | eval retentionInDays=frozenTimePeriodInSecs/86400 | table title retentionInDays`,
+	},
+	// License usage
+	{
+		name:  "license_usage",
+		query: `index=_internal source="*license_usage.log" type=usage idx="*" | eval MB=round(b/1048576, 2) | eval st_idx=st.": ".idx | timechart span=1d sum(MB) by st_idx | addtotals`,
+	},
+	// Hosts not sending logs
+	{
+		name:  "hosts_not_sending",
+		query: `| tstats latest(_time) as lastLogTime by host | where lastLogTime<relative_time(now(), "-24h@h") | eval time=strftime(lastLogTime, "%Y-%m-%d %H:%M:%S") | table host time | sort - time`,
+	},
+	// === Edge Case Queries ===
+	// Regex with special characters
+	{
+		name:  "rex_special_chars",
+		query: `index=web | rex field=_raw "From: (?<from>.*) To: (?<to>.*)"`,
+	},
+	// Conditional eval with case
+	{
+		name:  "eval_case_multi",
+		query: `index=web | eval result=case(error=404, "Not found", error=500, "Server Error", error=200, "OK", 1=1, "Unknown")`,
+	},
+	// Mvfilter with match
+	{
+		name:  "mvfilter_match",
+		query: `index=email | eval netorg_recipients=mvfilter(match(recipient, "\\.net$") OR match(recipient, "\\.org$"))`,
+	},
+	// Mstats metrics query
+	{
+		name:  "mstats_metrics",
+		query: `| mstats avg(_value) count(_value) WHERE metric_name="*.cpu.percent" by metric_name span=30s`,
+	},
+	// Rex sed mode
+	{
+		name:  "rex_sed_mode",
+		query: `index=pci | rex field=ccnumber mode=sed "s/(\\d{4}-){3}/XXXX-XXXX-XXXX-/g"`,
+	},
+	// Complex mvzip operation
+	{
+		name:  "mvzip_complex",
+		query: `index=main | eval tmp=mvzip(field, data, "######") | mvexpand tmp | eval field=mvindex(split(tmp, "######"), 0) | eval data=mvindex(split(tmp, "######"), 1)`,
+	},
+	// Subsearch with return
+	{
+		name:  "subsearch_return",
+		query: `index=syslog [search login error | return 1 user]`,
+	},
+	// Eval velocity calculation
+	{
+		name:  "eval_velocity",
+		query: `index=metrics | eval velocity=distance/time | where velocity>100`,
+	},
+	// String concatenation in eval
+	{
+		name:  "eval_concat",
+		query: `index=main | eval fullname=first_name." ".last_name | table fullname`,
+	},
+	// Timechart with averages
+	{
+		name:  "timechart_avg",
+		query: `index=metrics | timechart span=1m avg(CPU) by host`,
+	},
+	// Top with limit
+	{
+		name:  "top_limit",
+		query: `index=web | top limit=20 url`,
+	},
+	// Eventstats with max
+	{
+		name:  "eventstats_max",
+		query: `index=web | eventstats max(response_time) as max_rt by uri | eval is_slow=if(response_time>max_rt*0.9, "yes", "no")`,
+	},
+	// Streamstats cumulative
+	{
+		name:  "streamstats_cumulative",
+		query: `index=sales | sort _time | streamstats sum(amount) as running_total by category`,
+	},
+	// Complex where with functions
+	{
+		name:  "where_functions",
+		query: `index=main | where len(message)>100 AND match(status, "^[45]\\d{2}$")`,
+	},
+	// Dedup with sortby
+	{
+		name:  "dedup_sortby_multi",
+		query: `index=auth | dedup 3 user sortby -_time | table _time user action`,
+	},
+	// Append with union
+	{
+		name:  "append_multi",
+		query: `index=web status=500 | append [search index=web status=502] | append [search index=web status=503] | stats count by status`,
+	},
+	// Transaction with maxspan
+	{
+		name:  "transaction_maxspan_multi",
+		query: `index=auth | transaction user maxspan=30m maxpause=5m startswith=login endswith=logout | table user duration eventcount`,
+	},
+	// Lookup with output
+	{
+		name:  "lookup_output_multi",
+		query: `index=firewall | lookup geo_ip.csv src_ip OUTPUT country city lat lon | stats count by country city`,
+	},
+	// Rex with max_match
+	{
+		name:  "rex_max_match",
+		query: `index=logs | rex max_match=0 field=message "error: (?<errors>[^,]+)" | mvexpand errors | stats count by errors`,
+	},
+	// Eval with coalesce and null handling
+	{
+		name:  "eval_coalesce_null",
+		query: `index=main | eval display=coalesce(preferred_name, first_name, "Unknown") | eval has_email=if(isnull(email), "no", "yes")`,
+	},
+	// Stats with multiple aggregations
+	{
+		name:  "stats_multi_agg",
+		query: `index=web | stats count avg(response_time) as avg_rt max(response_time) as max_rt min(response_time) as min_rt stdev(response_time) as stdev_rt by uri | where count>100`,
+	},
+	// Bin with span
+	{
+		name:  "bin_span_hour",
+		query: `index=metrics | bin _time span=1h | stats avg(value) as hourly_avg by _time host | sort _time`,
+	},
+	// Makemv with tokenizer
+	{
+		name:  "makemv_tokenizer",
+		query: `index=logs | makemv delim="," tags | mvexpand tags | stats count by tags`,
+	},
+	// Chart with over and by
+	{
+		name:  "chart_over_by",
+		query: `index=sales | chart sum(revenue) over month by region | addtotals col=t`,
+	},
+	// Complex boolean in search
+	{
+		name:  "search_complex_bool",
+		query: `index=sysmon (EventCode=1 OR EventCode=3) AND NOT (Image="*\\svchost.exe" OR Image="*\\lsass.exe") AND (CommandLine="*powershell*" OR CommandLine="*cmd*")`,
+	},
+	// Eval with substr and len
+	{
+		name:  "eval_substr_len",
+		query: `index=main | eval domain=substr(email, len(mvindex(split(email, "@"), 0))+2) | stats count by domain`,
+	},
+	// Rare with countfield
+	{
+		name:  "rare_countfield",
+		query: `index=auth | rare limit=10 countfield=occurrences showperc=f user | where occurrences<5`,
+	},
+	// Fields minus multiple
+	{
+		name:  "fields_minus_multi",
+		query: `index=main | fields - _raw _time _indextime _cd _serial _bkt _si`,
+	},
+	// Rename with multiple fields
+	{
+		name:  "rename_fields",
+		query: `index=main | rename src_ip AS source_ip, dest_ip AS destination_ip, src_port AS source_port`,
+	},
+	// Outputcsv command
+	{
+		name:  "outputcsv_command",
+		query: `index=threats | stats count by indicator type severity | outputcsv threat_report.csv`,
+	},
+	// Inputcsv command
+	{
+		name:  "inputcsv_command",
+		query: `| inputcsv baseline.csv | append [search index=metrics | stats avg(value) by host] | stats first(value) as value by host`,
+	},
+}
+
+func TestRealWorldQueriesParsing(t *testing.T) {
+	var passed, failed int
+	var failures []string
+
+	for _, tc := range realWorldQueries {
+		result := ExtractConditions(tc.query)
+
+		if len(result.Errors) > 0 {
+			failed++
+			failures = append(failures, tc.name+": "+strings.Join(result.Errors, "; "))
+		} else {
+			passed++
+		}
+	}
+
+	t.Logf("=== Real-World Query Parsing Summary ===")
+	t.Logf("Passed: %d", passed)
+	t.Logf("Failed: %d", failed)
+	t.Logf("Total: %d", len(realWorldQueries))
+	t.Logf("Success Rate: %.1f%%", float64(passed)/float64(len(realWorldQueries))*100)
+
+	if len(failures) > 0 {
+		t.Logf("\nFailures:")
+		for _, f := range failures {
+			t.Logf("  - %s", f)
+		}
+	}
+
+	// Require at least 90% success rate
+	successRate := float64(passed) / float64(len(realWorldQueries)) * 100
+	if successRate < 90 {
+		t.Errorf("Success rate %.1f%% is below 90%% threshold", successRate)
+	}
+}
+
+func TestRealWorldQueriesConditionExtraction(t *testing.T) {
+	var withConditions, withoutConditions int
+	var conditionCounts = make(map[int]int)
+
+	for _, tc := range realWorldQueries {
+		result := ExtractConditions(tc.query)
+
+		if len(result.Conditions) > 0 {
+			withConditions++
+		} else {
+			withoutConditions++
+			t.Logf("No conditions extracted from: %s", tc.name)
+		}
+		conditionCounts[len(result.Conditions)]++
+	}
+
+	t.Logf("\n=== Condition Extraction Summary ===")
+	t.Logf("With conditions: %d (%.1f%%)", withConditions, float64(withConditions)/float64(len(realWorldQueries))*100)
+	t.Logf("Without conditions: %d (%.1f%%)", withoutConditions, float64(withoutConditions)/float64(len(realWorldQueries))*100)
+	t.Logf("\nCondition count distribution:")
+	for count := 0; count <= 15; count++ {
+		if c, ok := conditionCounts[count]; ok && c > 0 {
+			t.Logf("  %d conditions: %d queries", count, c)
+		}
+	}
+}
