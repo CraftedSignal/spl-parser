@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Get Go version
         id: vars
@@ -19,12 +19,12 @@ jobs:
           echo "go_version=${goVersion}" >> $GITHUB_OUTPUT
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ steps.vars.outputs.go_version }}
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@v6
         with:
           version: latest
           args: --config=.github/golangci.yml
