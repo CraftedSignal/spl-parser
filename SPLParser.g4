@@ -39,16 +39,6 @@ pipelineStage
     | formatCommand
     | convertCommand
     | bucketCommand
-    | tstatsCommand
-    | mstatsCommand
-    | restCommand
-    | inputlookupCommand
-    | inputcsvCommand
-    | multisearchCommand
-    | gentimesCommand
-    | outputlookupCommand
-    | datamodelCommand
-    | transposeCommand
     | genericCommand
     ;
 
@@ -268,115 +258,6 @@ bucketOption
     : IDENTIFIER EQ (QUOTED_STRING | NUMBER | TIME_SPAN | IDENTIFIER)
     ;
 
-// Tstats command - generates statistics from indexed data
-// | tstats count where index=main by host
-// | tstats sum(bytes) from datamodel=Web where Web.status>=400 by Web.src
-// | tstats summariesonly=t values(Processes.process) from datamodel=...
-tstatsCommand
-    : TSTATS (tstatsOption)* statsFunction (COMMA? statsFunction)* (FROM tstatsSource)? (WHERE searchExpression)? ((BY | GROUPBY) fieldList)?
-    ;
-
-tstatsOption
-    : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER | IDENTIFIER)
-    ;
-
-tstatsSource
-    : DATAMODEL EQ fieldName
-    | IDENTIFIER EQ fieldName
-    ;
-
-// Mstats command - generates statistics from metrics indexes
-// | mstats avg(_value) WHERE metric_name="cpu.percent" by host
-mstatsCommand
-    : MSTATS (mstatsOption)* statsFunction (COMMA? statsFunction)* (WHERE searchExpression)? ((BY | GROUPBY) fieldList)? (mstatsOption)*
-    ;
-
-mstatsOption
-    : IDENTIFIER EQ (QUOTED_STRING | NUMBER | TIME_SPAN | IDENTIFIER)
-    ;
-
-// Rest command - queries Splunk REST API
-// | rest /servicesNS/-/-/saved/searches
-// | rest timeout=600 splunk_server=local /servicesNS/-/-/saved/searches
-restCommand
-    : REST (restOption)* restPath (restOption)*
-    ;
-
-restPath
-    : SLASH (IDENTIFIER | MINUS | SLASH | WILDCARD | QUOTED_STRING)+
-    ;
-
-restOption
-    : IDENTIFIER EQ restOptionValue
-    ;
-
-// Rest option values can include hyphens (e.g., splunk_server=splunk-idx01)
-restOptionValue
-    : QUOTED_STRING
-    | NUMBER
-    | IDENTIFIER (MINUS IDENTIFIER)*   // Allow hyphenated identifiers
-    ;
-
-// Inputlookup command - reads from a lookup table
-// | inputlookup threat_intel.csv where score>80
-inputlookupCommand
-    : INPUTLOOKUP (inputlookupOption)* (IDENTIFIER | QUOTED_STRING) (WHERE searchExpression)?
-    ;
-
-inputlookupOption
-    : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER)
-    ;
-
-// Inputcsv command - reads from a CSV file
-// | inputcsv baseline.csv
-inputcsvCommand
-    : INPUTCSV (IDENTIFIER | QUOTED_STRING)
-    ;
-
-// Multisearch command - runs multiple searches in parallel
-// | multisearch [search index=a] [search index=b]
-multisearchCommand
-    : MULTISEARCH subsearch+
-    ;
-
-// Gentimes command - generates time-based events
-// | gentimes start=-30
-gentimesCommand
-    : GENTIMES gentimesOption*
-    ;
-
-gentimesOption
-    : IDENTIFIER EQ (QUOTED_STRING | NUMBER | MINUS NUMBER | TIME_SPAN | IDENTIFIER)
-    ;
-
-// Outputlookup command - writes results to a lookup table
-// | outputlookup error_summary.csv
-outputlookupCommand
-    : OUTPUTLOOKUP (outputlookupOption)* (IDENTIFIER | QUOTED_STRING)
-    ;
-
-outputlookupOption
-    : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER | IDENTIFIER)
-    ;
-
-// Datamodel command - returns information about data models
-// | datamodel
-// | datamodel Web
-datamodelCommand
-    : DATAMODEL IDENTIFIER?
-    ;
-
-// Transpose command - transposes rows and columns
-// | transpose
-transposeCommand
-    : TRANSPOSE (transposeOption)*
-    ;
-
-transposeOption
-    : IDENTIFIER EQ (QUOTED_STRING | NUMBER | IDENTIFIER)
-    | NUMBER
-    ;
-
 // Generic command for unrecognized commands
 genericCommand
     : IDENTIFIER genericArg*
@@ -405,7 +286,6 @@ searchTerm
     | condition
     | subsearch
     | MACRO
-    | WILDCARD       // Support for "where *" (match all)
     | bareWord
     ;
 

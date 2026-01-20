@@ -54,10 +54,9 @@ type conditionExtractor struct {
 	conditions      []Condition
 	computedFields  map[string]bool // Fields created by eval commands
 	currentStage    int
-	inSubsearch     int  // depth of subsearch nesting
-	inMultisearch   int  // depth of multisearch nesting (extract from these subsearches)
-	inFunctionCall  int  // depth of function call nesting (eval, count, etc.)
-	inStatsFunction int  // depth of stats function nesting (count(), sum(), etc.)
+	inSubsearch     int // depth of subsearch nesting
+	inFunctionCall  int // depth of function call nesting (eval, count, etc.)
+	inStatsFunction int // depth of stats function nesting (count(), sum(), etc.)
 	negated         bool
 	lastLogicalOp   string
 	errors          []string
@@ -130,23 +129,6 @@ func (e *conditionExtractor) ExitSubsearch(ctx *SubsearchContext) {
 	e.inSubsearch--
 }
 
-// EnterMultisearchCommand tracks when we enter a multisearch command
-// Multisearch subsearches contain the actual search conditions we want to extract
-func (e *conditionExtractor) EnterMultisearchCommand(ctx *MultisearchCommandContext) {
-	e.inMultisearch++
-}
-
-// ExitMultisearchCommand tracks when we exit a multisearch command
-func (e *conditionExtractor) ExitMultisearchCommand(ctx *MultisearchCommandContext) {
-	e.inMultisearch--
-}
-
-// shouldSkipSubsearch returns true if we should skip extracting from current subsearch
-// We extract from multisearch subsearches but skip join/append/lookup subsearches
-func (e *conditionExtractor) shouldSkipSubsearch() bool {
-	return e.inSubsearch > 0 && e.inMultisearch == 0
-}
-
 // EnterFunctionCall tracks when we enter a function call (eval, count, sum, etc.)
 // Conditions inside function calls are not filter conditions - they're aggregation expressions
 func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
@@ -185,8 +167,8 @@ func (e *conditionExtractor) EnterEvalAssignment(ctx *EvalAssignmentContext) {
 
 // EnterBareWord extracts bare search terms (quoted strings used as fulltext search)
 func (e *conditionExtractor) EnterBareWord(ctx *BareWordContext) {
-	// Skip inside non-multisearch subsearches
-	if e.shouldSkipSubsearch() {
+	// Skip inside subsearches
+	if e.inSubsearch > 0 {
 		return
 	}
 
@@ -212,8 +194,8 @@ func (e *conditionExtractor) EnterBareWord(ctx *BareWordContext) {
 
 // EnterCondition extracts field conditions
 func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
-	// Skip conditions inside non-multisearch subsearches (like join/append)
-	if e.shouldSkipSubsearch() {
+	// Skip conditions inside subsearches (like join)
+	if e.inSubsearch > 0 {
 		return
 	}
 
