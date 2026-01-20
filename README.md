@@ -136,9 +136,11 @@ Benchmarks on a corpus of 195 real-world SPL queries:
 | Metric | Value |
 |--------|-------|
 | Parse Success Rate | 100% |
-| Condition Extraction | 94% |
+| Condition Extraction | 95% |
 | Avg Parse Time | <1ms |
 | Queries/Second | >10,000 |
+
+*Note: The 5% without extracted conditions are queries that legitimately have no filter conditions (generating commands without WHERE clauses, filters on computed fields, or wildcard matches).*
 
 ## Grammar
 
