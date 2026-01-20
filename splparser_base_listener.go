@@ -308,6 +308,126 @@ func (s *BaseSPLParserListener) EnterBucketOption(ctx *BucketOptionContext) {}
 // ExitBucketOption is called when production bucketOption is exited.
 func (s *BaseSPLParserListener) ExitBucketOption(ctx *BucketOptionContext) {}
 
+// EnterTstatsCommand is called when production tstatsCommand is entered.
+func (s *BaseSPLParserListener) EnterTstatsCommand(ctx *TstatsCommandContext) {}
+
+// ExitTstatsCommand is called when production tstatsCommand is exited.
+func (s *BaseSPLParserListener) ExitTstatsCommand(ctx *TstatsCommandContext) {}
+
+// EnterTstatsOption is called when production tstatsOption is entered.
+func (s *BaseSPLParserListener) EnterTstatsOption(ctx *TstatsOptionContext) {}
+
+// ExitTstatsOption is called when production tstatsOption is exited.
+func (s *BaseSPLParserListener) ExitTstatsOption(ctx *TstatsOptionContext) {}
+
+// EnterTstatsSource is called when production tstatsSource is entered.
+func (s *BaseSPLParserListener) EnterTstatsSource(ctx *TstatsSourceContext) {}
+
+// ExitTstatsSource is called when production tstatsSource is exited.
+func (s *BaseSPLParserListener) ExitTstatsSource(ctx *TstatsSourceContext) {}
+
+// EnterMstatsCommand is called when production mstatsCommand is entered.
+func (s *BaseSPLParserListener) EnterMstatsCommand(ctx *MstatsCommandContext) {}
+
+// ExitMstatsCommand is called when production mstatsCommand is exited.
+func (s *BaseSPLParserListener) ExitMstatsCommand(ctx *MstatsCommandContext) {}
+
+// EnterMstatsOption is called when production mstatsOption is entered.
+func (s *BaseSPLParserListener) EnterMstatsOption(ctx *MstatsOptionContext) {}
+
+// ExitMstatsOption is called when production mstatsOption is exited.
+func (s *BaseSPLParserListener) ExitMstatsOption(ctx *MstatsOptionContext) {}
+
+// EnterRestCommand is called when production restCommand is entered.
+func (s *BaseSPLParserListener) EnterRestCommand(ctx *RestCommandContext) {}
+
+// ExitRestCommand is called when production restCommand is exited.
+func (s *BaseSPLParserListener) ExitRestCommand(ctx *RestCommandContext) {}
+
+// EnterRestPath is called when production restPath is entered.
+func (s *BaseSPLParserListener) EnterRestPath(ctx *RestPathContext) {}
+
+// ExitRestPath is called when production restPath is exited.
+func (s *BaseSPLParserListener) ExitRestPath(ctx *RestPathContext) {}
+
+// EnterRestOption is called when production restOption is entered.
+func (s *BaseSPLParserListener) EnterRestOption(ctx *RestOptionContext) {}
+
+// ExitRestOption is called when production restOption is exited.
+func (s *BaseSPLParserListener) ExitRestOption(ctx *RestOptionContext) {}
+
+// EnterRestOptionValue is called when production restOptionValue is entered.
+func (s *BaseSPLParserListener) EnterRestOptionValue(ctx *RestOptionValueContext) {}
+
+// ExitRestOptionValue is called when production restOptionValue is exited.
+func (s *BaseSPLParserListener) ExitRestOptionValue(ctx *RestOptionValueContext) {}
+
+// EnterInputlookupCommand is called when production inputlookupCommand is entered.
+func (s *BaseSPLParserListener) EnterInputlookupCommand(ctx *InputlookupCommandContext) {}
+
+// ExitInputlookupCommand is called when production inputlookupCommand is exited.
+func (s *BaseSPLParserListener) ExitInputlookupCommand(ctx *InputlookupCommandContext) {}
+
+// EnterInputlookupOption is called when production inputlookupOption is entered.
+func (s *BaseSPLParserListener) EnterInputlookupOption(ctx *InputlookupOptionContext) {}
+
+// ExitInputlookupOption is called when production inputlookupOption is exited.
+func (s *BaseSPLParserListener) ExitInputlookupOption(ctx *InputlookupOptionContext) {}
+
+// EnterInputcsvCommand is called when production inputcsvCommand is entered.
+func (s *BaseSPLParserListener) EnterInputcsvCommand(ctx *InputcsvCommandContext) {}
+
+// ExitInputcsvCommand is called when production inputcsvCommand is exited.
+func (s *BaseSPLParserListener) ExitInputcsvCommand(ctx *InputcsvCommandContext) {}
+
+// EnterMultisearchCommand is called when production multisearchCommand is entered.
+func (s *BaseSPLParserListener) EnterMultisearchCommand(ctx *MultisearchCommandContext) {}
+
+// ExitMultisearchCommand is called when production multisearchCommand is exited.
+func (s *BaseSPLParserListener) ExitMultisearchCommand(ctx *MultisearchCommandContext) {}
+
+// EnterGentimesCommand is called when production gentimesCommand is entered.
+func (s *BaseSPLParserListener) EnterGentimesCommand(ctx *GentimesCommandContext) {}
+
+// ExitGentimesCommand is called when production gentimesCommand is exited.
+func (s *BaseSPLParserListener) ExitGentimesCommand(ctx *GentimesCommandContext) {}
+
+// EnterGentimesOption is called when production gentimesOption is entered.
+func (s *BaseSPLParserListener) EnterGentimesOption(ctx *GentimesOptionContext) {}
+
+// ExitGentimesOption is called when production gentimesOption is exited.
+func (s *BaseSPLParserListener) ExitGentimesOption(ctx *GentimesOptionContext) {}
+
+// EnterOutputlookupCommand is called when production outputlookupCommand is entered.
+func (s *BaseSPLParserListener) EnterOutputlookupCommand(ctx *OutputlookupCommandContext) {}
+
+// ExitOutputlookupCommand is called when production outputlookupCommand is exited.
+func (s *BaseSPLParserListener) ExitOutputlookupCommand(ctx *OutputlookupCommandContext) {}
+
+// EnterOutputlookupOption is called when production outputlookupOption is entered.
+func (s *BaseSPLParserListener) EnterOutputlookupOption(ctx *OutputlookupOptionContext) {}
+
+// ExitOutputlookupOption is called when production outputlookupOption is exited.
+func (s *BaseSPLParserListener) ExitOutputlookupOption(ctx *OutputlookupOptionContext) {}
+
+// EnterDatamodelCommand is called when production datamodelCommand is entered.
+func (s *BaseSPLParserListener) EnterDatamodelCommand(ctx *DatamodelCommandContext) {}
+
+// ExitDatamodelCommand is called when production datamodelCommand is exited.
+func (s *BaseSPLParserListener) ExitDatamodelCommand(ctx *DatamodelCommandContext) {}
+
+// EnterTransposeCommand is called when production transposeCommand is entered.
+func (s *BaseSPLParserListener) EnterTransposeCommand(ctx *TransposeCommandContext) {}
+
+// ExitTransposeCommand is called when production transposeCommand is exited.
+func (s *BaseSPLParserListener) ExitTransposeCommand(ctx *TransposeCommandContext) {}
+
+// EnterTransposeOption is called when production transposeOption is entered.
+func (s *BaseSPLParserListener) EnterTransposeOption(ctx *TransposeOptionContext) {}
+
+// ExitTransposeOption is called when production transposeOption is exited.
+func (s *BaseSPLParserListener) ExitTransposeOption(ctx *TransposeOptionContext) {}
+
 // EnterGenericCommand is called when production genericCommand is entered.
 func (s *BaseSPLParserListener) EnterGenericCommand(ctx *GenericCommandContext) {}
 

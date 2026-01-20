@@ -151,6 +151,66 @@ type SPLParserVisitor interface {
 	// Visit a parse tree produced by SPLParser#bucketOption.
 	VisitBucketOption(ctx *BucketOptionContext) interface{}
 
+	// Visit a parse tree produced by SPLParser#tstatsCommand.
+	VisitTstatsCommand(ctx *TstatsCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#tstatsOption.
+	VisitTstatsOption(ctx *TstatsOptionContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#tstatsSource.
+	VisitTstatsSource(ctx *TstatsSourceContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#mstatsCommand.
+	VisitMstatsCommand(ctx *MstatsCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#mstatsOption.
+	VisitMstatsOption(ctx *MstatsOptionContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#restCommand.
+	VisitRestCommand(ctx *RestCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#restPath.
+	VisitRestPath(ctx *RestPathContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#restOption.
+	VisitRestOption(ctx *RestOptionContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#restOptionValue.
+	VisitRestOptionValue(ctx *RestOptionValueContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#inputlookupCommand.
+	VisitInputlookupCommand(ctx *InputlookupCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#inputlookupOption.
+	VisitInputlookupOption(ctx *InputlookupOptionContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#inputcsvCommand.
+	VisitInputcsvCommand(ctx *InputcsvCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#multisearchCommand.
+	VisitMultisearchCommand(ctx *MultisearchCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#gentimesCommand.
+	VisitGentimesCommand(ctx *GentimesCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#gentimesOption.
+	VisitGentimesOption(ctx *GentimesOptionContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#outputlookupCommand.
+	VisitOutputlookupCommand(ctx *OutputlookupCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#outputlookupOption.
+	VisitOutputlookupOption(ctx *OutputlookupOptionContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#datamodelCommand.
+	VisitDatamodelCommand(ctx *DatamodelCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#transposeCommand.
+	VisitTransposeCommand(ctx *TransposeCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#transposeOption.
+	VisitTransposeOption(ctx *TransposeOptionContext) interface{}
+
 	// Visit a parse tree produced by SPLParser#genericCommand.
 	VisitGenericCommand(ctx *GenericCommandContext) interface{}
 

@@ -135,7 +135,8 @@ Benchmarks on a corpus of 195 real-world SPL queries:
 
 | Metric | Value |
 |--------|-------|
-| Success Rate | 87% |
+| Parse Success Rate | 100% |
+| Condition Extraction | 94% |
 | Avg Parse Time | <1ms |
 | Queries/Second | >10,000 |
 

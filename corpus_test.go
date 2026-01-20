@@ -35,7 +35,7 @@ func TestCorpus(t *testing.T) {
 
 	t.Logf("Loaded %d queries from corpus", len(queries))
 
-	var success, partial, failed, panics int
+	var withConditions, noConditions, parseErrors, panics int
 
 	for _, q := range queries {
 		func() {
@@ -48,22 +48,24 @@ func TestCorpus(t *testing.T) {
 
 			result := ExtractConditions(q.Query)
 
-			if len(result.Conditions) > 0 && len(result.Errors) == 0 {
-				success++
+			if len(result.Errors) > 0 {
+				parseErrors++
 			} else if len(result.Conditions) > 0 {
-				partial++
+				withConditions++
 			} else {
-				failed++
+				noConditions++
 			}
 		}()
 	}
 
-	total := success + partial + failed + panics
-	t.Logf("Results: success=%d (%.1f%%), partial=%d (%.1f%%), failed=%d (%.1f%%), panics=%d",
-		success, float64(success)*100/float64(total),
-		partial, float64(partial)*100/float64(total),
-		failed, float64(failed)*100/float64(total),
-		panics)
+	total := withConditions + noConditions + parseErrors + panics
+	parseSuccess := withConditions + noConditions
+	t.Logf("Parse success: %d/%.0f (%.1f%%)",
+		parseSuccess, float64(total), float64(parseSuccess)*100/float64(total))
+	t.Logf("  - With conditions: %d (%.1f%%)", withConditions, float64(withConditions)*100/float64(total))
+	t.Logf("  - No conditions: %d (%.1f%%)", noConditions, float64(noConditions)*100/float64(total))
+	t.Logf("Parse errors: %d (%.1f%%)", parseErrors, float64(parseErrors)*100/float64(total))
+	t.Logf("Panics: %d", panics)
 
 	if panics > 0 {
 		t.Errorf("Parser panicked on %d queries!", panics)

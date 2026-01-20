@@ -199,6 +199,86 @@ func (v *BaseSPLParserVisitor) VisitBucketOption(ctx *BucketOptionContext) inter
 	return v.VisitChildren(ctx)
 }
 
+func (v *BaseSPLParserVisitor) VisitTstatsCommand(ctx *TstatsCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitTstatsOption(ctx *TstatsOptionContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitTstatsSource(ctx *TstatsSourceContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitMstatsCommand(ctx *MstatsCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitMstatsOption(ctx *MstatsOptionContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitRestCommand(ctx *RestCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitRestPath(ctx *RestPathContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitRestOption(ctx *RestOptionContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitRestOptionValue(ctx *RestOptionValueContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitInputlookupCommand(ctx *InputlookupCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitInputlookupOption(ctx *InputlookupOptionContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitInputcsvCommand(ctx *InputcsvCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitMultisearchCommand(ctx *MultisearchCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitGentimesCommand(ctx *GentimesCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitGentimesOption(ctx *GentimesOptionContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitOutputlookupCommand(ctx *OutputlookupCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitOutputlookupOption(ctx *OutputlookupOptionContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitDatamodelCommand(ctx *DatamodelCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitTransposeCommand(ctx *TransposeCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitTransposeOption(ctx *TransposeOptionContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitGenericCommand(ctx *GenericCommandContext) interface{} {
 	return v.VisitChildren(ctx)
 }

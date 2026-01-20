@@ -151,6 +151,66 @@ type SPLParserListener interface {
 	// EnterBucketOption is called when entering the bucketOption production.
 	EnterBucketOption(c *BucketOptionContext)
 
+	// EnterTstatsCommand is called when entering the tstatsCommand production.
+	EnterTstatsCommand(c *TstatsCommandContext)
+
+	// EnterTstatsOption is called when entering the tstatsOption production.
+	EnterTstatsOption(c *TstatsOptionContext)
+
+	// EnterTstatsSource is called when entering the tstatsSource production.
+	EnterTstatsSource(c *TstatsSourceContext)
+
+	// EnterMstatsCommand is called when entering the mstatsCommand production.
+	EnterMstatsCommand(c *MstatsCommandContext)
+
+	// EnterMstatsOption is called when entering the mstatsOption production.
+	EnterMstatsOption(c *MstatsOptionContext)
+
+	// EnterRestCommand is called when entering the restCommand production.
+	EnterRestCommand(c *RestCommandContext)
+
+	// EnterRestPath is called when entering the restPath production.
+	EnterRestPath(c *RestPathContext)
+
+	// EnterRestOption is called when entering the restOption production.
+	EnterRestOption(c *RestOptionContext)
+
+	// EnterRestOptionValue is called when entering the restOptionValue production.
+	EnterRestOptionValue(c *RestOptionValueContext)
+
+	// EnterInputlookupCommand is called when entering the inputlookupCommand production.
+	EnterInputlookupCommand(c *InputlookupCommandContext)
+
+	// EnterInputlookupOption is called when entering the inputlookupOption production.
+	EnterInputlookupOption(c *InputlookupOptionContext)
+
+	// EnterInputcsvCommand is called when entering the inputcsvCommand production.
+	EnterInputcsvCommand(c *InputcsvCommandContext)
+
+	// EnterMultisearchCommand is called when entering the multisearchCommand production.
+	EnterMultisearchCommand(c *MultisearchCommandContext)
+
+	// EnterGentimesCommand is called when entering the gentimesCommand production.
+	EnterGentimesCommand(c *GentimesCommandContext)
+
+	// EnterGentimesOption is called when entering the gentimesOption production.
+	EnterGentimesOption(c *GentimesOptionContext)
+
+	// EnterOutputlookupCommand is called when entering the outputlookupCommand production.
+	EnterOutputlookupCommand(c *OutputlookupCommandContext)
+
+	// EnterOutputlookupOption is called when entering the outputlookupOption production.
+	EnterOutputlookupOption(c *OutputlookupOptionContext)
+
+	// EnterDatamodelCommand is called when entering the datamodelCommand production.
+	EnterDatamodelCommand(c *DatamodelCommandContext)
+
+	// EnterTransposeCommand is called when entering the transposeCommand production.
+	EnterTransposeCommand(c *TransposeCommandContext)
+
+	// EnterTransposeOption is called when entering the transposeOption production.
+	EnterTransposeOption(c *TransposeOptionContext)
+
 	// EnterGenericCommand is called when entering the genericCommand production.
 	EnterGenericCommand(c *GenericCommandContext)
 
@@ -375,6 +435,66 @@ type SPLParserListener interface {
 
 	// ExitBucketOption is called when exiting the bucketOption production.
 	ExitBucketOption(c *BucketOptionContext)
+
+	// ExitTstatsCommand is called when exiting the tstatsCommand production.
+	ExitTstatsCommand(c *TstatsCommandContext)
+
+	// ExitTstatsOption is called when exiting the tstatsOption production.
+	ExitTstatsOption(c *TstatsOptionContext)
+
+	// ExitTstatsSource is called when exiting the tstatsSource production.
+	ExitTstatsSource(c *TstatsSourceContext)
+
+	// ExitMstatsCommand is called when exiting the mstatsCommand production.
+	ExitMstatsCommand(c *MstatsCommandContext)
+
+	// ExitMstatsOption is called when exiting the mstatsOption production.
+	ExitMstatsOption(c *MstatsOptionContext)
+
+	// ExitRestCommand is called when exiting the restCommand production.
+	ExitRestCommand(c *RestCommandContext)
+
+	// ExitRestPath is called when exiting the restPath production.
+	ExitRestPath(c *RestPathContext)
+
+	// ExitRestOption is called when exiting the restOption production.
+	ExitRestOption(c *RestOptionContext)
+
+	// ExitRestOptionValue is called when exiting the restOptionValue production.
+	ExitRestOptionValue(c *RestOptionValueContext)
+
+	// ExitInputlookupCommand is called when exiting the inputlookupCommand production.
+	ExitInputlookupCommand(c *InputlookupCommandContext)
+
+	// ExitInputlookupOption is called when exiting the inputlookupOption production.
+	ExitInputlookupOption(c *InputlookupOptionContext)
+
+	// ExitInputcsvCommand is called when exiting the inputcsvCommand production.
+	ExitInputcsvCommand(c *InputcsvCommandContext)
+
+	// ExitMultisearchCommand is called when exiting the multisearchCommand production.
+	ExitMultisearchCommand(c *MultisearchCommandContext)
+
+	// ExitGentimesCommand is called when exiting the gentimesCommand production.
+	ExitGentimesCommand(c *GentimesCommandContext)
+
+	// ExitGentimesOption is called when exiting the gentimesOption production.
+	ExitGentimesOption(c *GentimesOptionContext)
+
+	// ExitOutputlookupCommand is called when exiting the outputlookupCommand production.
+	ExitOutputlookupCommand(c *OutputlookupCommandContext)
+
+	// ExitOutputlookupOption is called when exiting the outputlookupOption production.
+	ExitOutputlookupOption(c *OutputlookupOptionContext)
+
+	// ExitDatamodelCommand is called when exiting the datamodelCommand production.
+	ExitDatamodelCommand(c *DatamodelCommandContext)
+
+	// ExitTransposeCommand is called when exiting the transposeCommand production.
+	ExitTransposeCommand(c *TransposeCommandContext)
+
+	// ExitTransposeOption is called when exiting the transposeOption production.
+	ExitTransposeOption(c *TransposeOptionContext)
 
 	// ExitGenericCommand is called when exiting the genericCommand production.
 	ExitGenericCommand(c *GenericCommandContext)

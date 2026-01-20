@@ -5,6 +5,7 @@ AND         : [Aa][Nn][Dd] ;
 OR          : [Oo][Rr] ;
 NOT         : [Nn][Oo][Tt] ;
 BY          : [Bb][Yy] ;
+GROUPBY     : [Gg][Rr][Oo][Uu][Pp][Bb][Yy] ;
 AS          : [Aa][Ss] ;
 IN          : [Ii][Nn] ;
 WHERE       : [Ww][Hh][Ee][Rr][Ee] ;
@@ -38,6 +39,19 @@ CONVERT     : [Cc][Oo][Nn][Vv][Ee][Rr][Tt] ;
 BUCKET      : [Bb][Uu][Cc][Kk][Ee][Tt] ;
 BIN         : [Bb][Ii][Nn] ;
 OVER        : [Oo][Vv][Ee][Rr] ;
+FROM        : [Ff][Rr][Oo][Mm] ;
+
+// Generating commands
+TSTATS      : [Tt][Ss][Tt][Aa][Tt][Ss] ;
+MSTATS      : [Mm][Ss][Tt][Aa][Tt][Ss] ;
+REST        : [Rr][Ee][Ss][Tt] ;
+INPUTLOOKUP : [Ii][Nn][Pp][Uu][Tt][Ll][Oo][Oo][Kk][Uu][Pp] ;
+INPUTCSV    : [Ii][Nn][Pp][Uu][Tt][Cc][Ss][Vv] ;
+OUTPUTLOOKUP: [Oo][Uu][Tt][Pp][Uu][Tt][Ll][Oo][Oo][Kk][Uu][Pp] ;
+MULTISEARCH : [Mm][Uu][Ll][Tt][Ii][Ss][Ee][Aa][Rr][Cc][Hh] ;
+GENTIMES    : [Gg][Ee][Nn][Tt][Ii][Mm][Ee][Ss] ;
+DATAMODEL   : [Dd][Aa][Tt][Aa][Mm][Oo][Dd][Ee][Ll] ;
+TRANSPOSE   : [Tt][Rr][Aa][Nn][Ss][Pp][Oo][Ss][Ee] ;
 
 // Comparison operators
 EQ          : '=' ;
