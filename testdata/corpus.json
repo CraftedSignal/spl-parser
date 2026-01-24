@@ -988,5 +988,20 @@
     "source": "grammar_test",
     "name": "wildcard_or_condition",
     "query": "\"error\" OR * | head 10"
+  },
+  {
+    "source": "grammar_test",
+    "name": "stats_count_eval",
+    "query": "index=main | stats count(eval(status=\"200\")) as success_count by host"
+  },
+  {
+    "source": "grammar_test",
+    "name": "where_not_subsearch",
+    "query": "index=main | where NOT [search index=blocklist | fields blocked_ip]"
+  },
+  {
+    "source": "grammar_test",
+    "name": "where_field_in_subsearch",
+    "query": "index=main | where src_ip IN [search index=threat_intel | fields ip]"
   }
 ]

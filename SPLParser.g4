@@ -292,7 +292,8 @@ searchTerm
 // Field conditions
 condition
     : fieldName comparisonOp value
-    | fieldName IN LPAREN valueList RPAREN
+    | fieldName IN LPAREN valueList RPAREN      // field IN ("val1", "val2")
+    | fieldName IN subsearch                     // field IN [search ...]
     | functionCall
     ;
 
@@ -355,14 +356,17 @@ unaryExpression
 
 primaryExpression
     : LPAREN expression RPAREN
+    | subsearch                   // Allow subsearch in expressions (e.g., where NOT [search ...])
     | functionCall
     | value
     | fieldName
     ;
 
 // Function call
+// Note: EVAL keyword is included because it can be used as a function inside stats (e.g., count(eval(status="200")))
 functionCall
     : IDENTIFIER LPAREN argumentList? RPAREN
+    | EVAL LPAREN argumentList? RPAREN
     | MATCH LPAREN argumentList RPAREN
     | LIKE LPAREN argumentList RPAREN
     | CIDRMATCH LPAREN argumentList RPAREN
