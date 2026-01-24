@@ -400,11 +400,12 @@ wildcardValue
     | WILDCARD                                                             // just *
     ;
 
-// Bare word (search term - can be identifier, number, or quoted string)
+// Bare word (search term - can be identifier, number, quoted string, or wildcard)
 bareWord
     : IDENTIFIER
     | NUMBER
     | QUOTED_STRING
+    | wildcardValue  // Allows bare * or *value patterns as search terms
     ;
 
 // Field name

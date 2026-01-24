@@ -7,7 +7,7 @@
   {
     "source": "realworld_test",
     "name": "brute_force_username_guessing",
-    "query": "index=windows sourcetype=windows EventCode=4625 OR EventCode=4624 | bin _time span=5m as minute | rex \"Security ID:\\s*\\w*\\s*\\w*\\s*Account Name:\\s*(?\u003cusername\u003e.*)\\s*Account Domain:\" | stats count(Keywords) as Attempts, count(eval(match(Keywords,\"Audit Failure\"))) as Failed, count(eval(match(Keywords,\"Audit Success\"))) as Success by minute username | where Failed\u003e=4 | stats dc(username) as Total by minute | where Total\u003e5"
+    "query": "index=windows sourcetype=windows EventCode=4625 OR EventCode=4624 | bin _time span=5m as minute | rex \"Security ID:\\s*\\w*\\s*\\w*\\s*Account Name:\\s*(?<username>.*)\\s*Account Domain:\" | stats count(Keywords) as Attempts, count(eval(match(Keywords,\"Audit Failure\"))) as Failed, count(eval(match(Keywords,\"Audit Success\"))) as Success by minute username | where Failed>=4 | stats dc(username) as Total by minute | where Total>5"
   },
   {
     "source": "realworld_test",
@@ -52,7 +52,7 @@
   {
     "source": "realworld_test",
     "name": "failed_login_disabled_account",
-    "query": "index=windows source=\"WinEventLog:security\" EventCode=4625 (Sub_Status=\"0xc0000072\" OR Sub_Status=\"0xC0000072\") Security_ID!=\"NULL SID\" Account_Name!=\"*$\" | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \"Which\\sLogon\\sFailed:\\s+\\S+\\s\\S+\\s+\\S+\\s+Account\\sName:\\s+(?\u003cfacct\u003e\\S+)\" | stats count by Date, facct, host, Keywords | rename facct as \"Target Account\" host as \"Host\" Keywords as \"Status\" count as \"Count\""
+    "query": "index=windows source=\"WinEventLog:security\" EventCode=4625 (Sub_Status=\"0xc0000072\" OR Sub_Status=\"0xC0000072\") Security_ID!=\"NULL SID\" Account_Name!=\"*$\" | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \"Which\\sLogon\\sFailed:\\s+\\S+\\s\\S+\\s+\\S+\\s+Account\\sName:\\s+(?<facct>\\S+)\" | stats count by Date, facct, host, Keywords | rename facct as \"Target Account\" host as \"Host\" Keywords as \"Status\" count as \"Count\""
   },
   {
     "source": "realworld_test",
@@ -62,12 +62,12 @@
   {
     "source": "realworld_test",
     "name": "failed_rdp",
-    "query": "index=windows source=WinEventLog:Security sourcetype=WinEventLog:security Logon_Type=10 EventCode=4625 | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \"Failed:\\s+.*\\s+Account\\sName:\\s+(?\u003cTargetAccount\u003e\\S+)\\s\" | stats count by Date, TargetAccount, Failure_Reason, host | sort - Date"
+    "query": "index=windows source=WinEventLog:Security sourcetype=WinEventLog:security Logon_Type=10 EventCode=4625 | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \"Failed:\\s+.*\\s+Account\\sName:\\s+(?<TargetAccount>\\S+)\\s\" | stats count by Date, TargetAccount, Failure_Reason, host | sort - Date"
   },
   {
     "source": "realworld_test",
     "name": "account_reenabled",
-    "query": "index=windows sourcetype=WinEventLog:Security EventCode=4722 | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \"ID:\\s+\\w+\\\\\\(?\u003csourceaccount\u003e\\S+)\\s+\" | rex \"Account:\\s+Security\\sID:\\s+\\w+\\\\\\(?\u003ctargetaccount\u003e\\S+)\\s+\" | stats count by Date, sourceaccount, targetaccount, Keywords, host | rename sourceaccount as \"Source Account\" | rename targetaccount as \"Target Account\" | sort - Date"
+    "query": "index=windows sourcetype=WinEventLog:Security EventCode=4722 | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \"ID:\\s+\\w+\\\\\\(?<sourceaccount>\\S+)\\s+\" | rex \"Account:\\s+Security\\sID:\\s+\\w+\\\\\\(?<targetaccount>\\S+)\\s+\" | stats count by Date, sourceaccount, targetaccount, Keywords, host | rename sourceaccount as \"Source Account\" | rename targetaccount as \"Target Account\" | sort - Date"
   },
   {
     "source": "realworld_test",
@@ -77,7 +77,7 @@
   {
     "source": "realworld_test",
     "name": "group_membership_changes",
-    "query": "index=windows sourcetype=WinEventLog:Security (EventCode=4728 OR EventCode=4732 OR EventCode=4746 OR EventCode=4751 OR EventCode=4756 OR EventCode=4161 OR EventCode=4185) | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \"Member:\\s+\\w+\\s\\w+:.*\\\\\\(?\u003cTargetAccount\u003e.*)\" | rex \"Account\\sName:\\s+(?\u003cSourceAccount\u003e.*)\" | stats count by Date, TargetAccount, SourceAccount, Group_Name, host, Keywords | sort - Date | rename SourceAccount as \"Administrator Account\" | rename TargetAccount as \"Target Account\""
+    "query": "index=windows sourcetype=WinEventLog:Security (EventCode=4728 OR EventCode=4732 OR EventCode=4746 OR EventCode=4751 OR EventCode=4756 OR EventCode=4161 OR EventCode=4185) | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \"Member:\\s+\\w+\\s\\w+:.*\\\\\\(?<TargetAccount>.*)\" | rex \"Account\\sName:\\s+(?<SourceAccount>.*)\" | stats count by Date, TargetAccount, SourceAccount, Group_Name, host, Keywords | sort - Date | rename SourceAccount as \"Administrator Account\" | rename TargetAccount as \"Target Account\""
   },
   {
     "source": "realworld_test",
@@ -102,7 +102,7 @@
   {
     "source": "realworld_test",
     "name": "linux_cron_urls",
-    "query": "index=hosts sourcetype=linux_messages process=CROND | rex field=_raw \"((crond|CROND)\\D[0-9]{4,5}\\D:\\s\\D[a-z]{3,}\\D\\s)(?\u003caction\u003e\\w+)\\s\\((?\u003cCronCommand\u003e.*(?=\\)))\" | where isnotnull(action) | search action=CMD | rex field=CronCommand \"(?\u003curl\u003ehttps?:\\/\\/(www\\.)?[-a-zA-Z0-9@:%._\\+~#=]{1,256}\\.[a-zA-Z0-9()]{1,6}\\b([-a-zA-Z0-9()@:%_\\+.~#?\u0026\\/=]*))\" | where isnotnull(url) | dedup host url | search NOT url=\"http://127.0.0.1*\" | table _time host action CronCommand url"
+    "query": "index=hosts sourcetype=linux_messages process=CROND | rex field=_raw \"((crond|CROND)\\D[0-9]{4,5}\\D:\\s\\D[a-z]{3,}\\D\\s)(?<action>\\w+)\\s\\((?<CronCommand>.*(?=\\)))\" | where isnotnull(action) | search action=CMD | rex field=CronCommand \"(?<url>https?:\\/\\/(www\\.)?[-a-zA-Z0-9@:%._\\+~#=]{1,256}\\.[a-zA-Z0-9()]{1,6}\\b([-a-zA-Z0-9()@:%_\\+.~#?&\\/=]*))\" | where isnotnull(url) | dedup host url | search NOT url=\"http://127.0.0.1*\" | table _time host action CronCommand url"
   },
   {
     "source": "realworld_test",
@@ -112,7 +112,7 @@
   {
     "source": "realworld_test",
     "name": "powershell_obfuscation",
-    "query": "index=windows sourcetype=WinEventLog:Security EventCode=4688 | eval ps_command=CommandLine | eval obf_symbol=ps_command | makemv tokenizer=\"(['@%^,;:=\u0026+\\\"\\(\\{\\)\\}\\!\\*\\./\\?_\\[\\]\\|\u003c\u003e~$])\" obf_symbol | eval obf_symbol_count=mvcount(obf_symbol) | eval ps_len=len(ps_command) | where ps_len\u003e100"
+    "query": "index=windows sourcetype=WinEventLog:Security EventCode=4688 | eval ps_command=CommandLine | eval obf_symbol=ps_command | makemv tokenizer=\"(['@%^,;:=&+\\\"\\(\\{\\)\\}\\!\\*\\./\\?_\\[\\]\\|<>~$])\" obf_symbol | eval obf_symbol_count=mvcount(obf_symbol) | eval ps_len=len(ps_command) | where ps_len>100"
   },
   {
     "source": "realworld_test",
@@ -127,12 +127,12 @@
   {
     "source": "realworld_test",
     "name": "base64_commands",
-    "query": "index=windows sourcetype=WinEventLog:Security EventCode=4688 | where match(CommandLine, \"(?i)[a-z0-9+/=]{60}\") | eval encoded_len=len(CommandLine) | where encoded_len\u003e200 | table _time host User CommandLine encoded_len"
+    "query": "index=windows sourcetype=WinEventLog:Security EventCode=4688 | where match(CommandLine, \"(?i)[a-z0-9+/=]{60}\") | eval encoded_len=len(CommandLine) | where encoded_len>200 | table _time host User CommandLine encoded_len"
   },
   {
     "source": "realworld_test",
     "name": "account_creation_deletion",
-    "query": "index=windows sourcetype=WinEventLog:Security (EventCode=4726 OR EventCode=4720) | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \"Subject:\\s+\\w+\\s\\S+\\s+\\S+\\s+\\w+\\s\\w+:\\s+(?\u003cSourceAccount\u003e\\S+)\" | rex \"Target\\s\\w+:\\s+\\w+\\s\\w+:\\s+\\S+\\s+\\w+\\s\\w+:\\s+(?\u003cDeletedAccount\u003e\\S+)\" | rex \"New\\s\\w+:\\s+\\w+\\s\\w+:\\s+\\S+\\s+\\w+\\s\\w+:\\s+(?\u003cNewAccount\u003e\\S+)\" | eval SuspectAccount=coalesce(DeletedAccount,NewAccount) | transaction SuspectAccount startswith=\"EventCode=4720\" endswith=\"EventCode=4726\" | eval duration=round(((duration/60)/60)/24, 2) | eval Age=case(duration\u003c=1, \"Critical\", duration\u003e1 AND duration\u003c=7, \"Warning\", duration\u003e7, \"Normal\") | table Date, index, host, SourceAccount, SuspectAccount, duration, Age"
+    "query": "index=windows sourcetype=WinEventLog:Security (EventCode=4726 OR EventCode=4720) | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \"Subject:\\s+\\w+\\s\\S+\\s+\\S+\\s+\\w+\\s\\w+:\\s+(?<SourceAccount>\\S+)\" | rex \"Target\\s\\w+:\\s+\\w+\\s\\w+:\\s+\\S+\\s+\\w+\\s\\w+:\\s+(?<DeletedAccount>\\S+)\" | rex \"New\\s\\w+:\\s+\\w+\\s\\w+:\\s+\\S+\\s+\\w+\\s\\w+:\\s+(?<NewAccount>\\S+)\" | eval SuspectAccount=coalesce(DeletedAccount,NewAccount) | transaction SuspectAccount startswith=\"EventCode=4720\" endswith=\"EventCode=4726\" | eval duration=round(((duration/60)/60)/24, 2) | eval Age=case(duration<=1, \"Critical\", duration>1 AND duration<=7, \"Warning\", duration>7, \"Normal\") | table Date, index, host, SourceAccount, SuspectAccount, duration, Age"
   },
   {
     "source": "realworld_test",
@@ -147,12 +147,12 @@
   {
     "source": "realworld_test",
     "name": "dns_tunneling",
-    "query": "index=dns sourcetype=stream:dns | eval query_len=len(query) | where query_len \u003e 50 | stats count avg(query_len) as avg_len max(query_len) as max_len by src_ip query_type | where count \u003e 100 AND avg_len \u003e 40"
+    "query": "index=dns sourcetype=stream:dns | eval query_len=len(query) | where query_len > 50 | stats count avg(query_len) as avg_len max(query_len) as max_len by src_ip query_type | where count > 100 AND avg_len > 40"
   },
   {
     "source": "realworld_test",
     "name": "network_beaconing",
-    "query": "index=firewall sourcetype=pan:traffic action=allowed dest_port=443 | bucket _time span=1m | stats count by _time src_ip dest_ip | streamstats window=60 avg(count) as avg_count stdev(count) as stdev_count by src_ip dest_ip | where stdev_count \u003c 1 AND count \u003e 0"
+    "query": "index=firewall sourcetype=pan:traffic action=allowed dest_port=443 | bucket _time span=1m | stats count by _time src_ip dest_ip | streamstats window=60 avg(count) as avg_count stdev(count) as stdev_count by src_ip dest_ip | where stdev_count < 1 AND count > 0"
   },
   {
     "source": "realworld_test",
@@ -162,12 +162,12 @@
   {
     "source": "realworld_test",
     "name": "o365_file_downloads",
-    "query": "index=o365 sourcetype=\"o365:management:activity\" Operation=FileDownloaded | stats count by UserId, ClientIP, SourceFileName | where count \u003e 50"
+    "query": "index=o365 sourcetype=\"o365:management:activity\" Operation=FileDownloaded | stats count by UserId, ClientIP, SourceFileName | where count > 50"
   },
   {
     "source": "realworld_test",
     "name": "aws_unusual_logins",
-    "query": "index=aws sourcetype=aws:cloudtrail eventName=ConsoleLogin | iplocation sourceIPAddress | stats count by userIdentity.userName, sourceIPAddress, Country, City | where count \u003c 3"
+    "query": "index=aws sourcetype=aws:cloudtrail eventName=ConsoleLogin | iplocation sourceIPAddress | stats count by userIdentity.userName, sourceIPAddress, Country, City | where count < 3"
   },
   {
     "source": "realworld_test",
@@ -177,7 +177,7 @@
   {
     "source": "realworld_test",
     "name": "failed_auth_nonexistent",
-    "query": "index=windows source=\"WinEventLog:security\" sourcetype=\"WinEventLog:Security\" EventCode=4625 Sub_Status=0xC0000064 | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \"Which\\sLogon\\sFailed:\\s+Security\\sID:\\s+\\S.*\\s+\\w+\\s\\w+\\S\\s.(?\u003cuacct\u003e\\S.*)\" | stats count by Date, uacct, host | rename count as \"Attempts\" | sort - Attempts"
+    "query": "index=windows source=\"WinEventLog:security\" sourcetype=\"WinEventLog:Security\" EventCode=4625 Sub_Status=0xC0000064 | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \"Which\\sLogon\\sFailed:\\s+Security\\sID:\\s+\\S.*\\s+\\w+\\s\\w+\\S\\s.(?<uacct>\\S.*)\" | stats count by Date, uacct, host | rename count as \"Attempts\" | sort - Attempts"
   },
   {
     "source": "realworld_test",
@@ -197,7 +197,7 @@
   {
     "source": "realworld_test",
     "name": "complex_eval_chain",
-    "query": "index=web | eval response_time=round(response_time_ms/1000, 2) | eval status_category=case(status\u003c300, \"success\", status\u003c400, \"redirect\", status\u003c500, \"client_error\", true(), \"server_error\") | eval is_slow=if(response_time\u003e5, \"yes\", \"no\") | stats avg(response_time) as avg_time count by status_category is_slow"
+    "query": "index=web | eval response_time=round(response_time_ms/1000, 2) | eval status_category=case(status<300, \"success\", status<400, \"redirect\", status<500, \"client_error\", true(), \"server_error\") | eval is_slow=if(response_time>5, \"yes\", \"no\") | stats avg(response_time) as avg_time count by status_category is_slow"
   },
   {
     "source": "realworld_test",
@@ -207,17 +207,17 @@
   {
     "source": "realworld_test",
     "name": "coalesce_fields",
-    "query": "index=proxy | eval client=coalesce(c_ip, cs_client_ip, src_ip) | stats count by client | where count \u003e 1000"
+    "query": "index=proxy | eval client=coalesce(c_ip, cs_client_ip, src_ip) | stats count by client | where count > 1000"
   },
   {
     "source": "realworld_test",
     "name": "special_chars_path",
-    "query": "index=sysmon EventCode=1 Image=\"C:\\\\Windows\\\\System32\\\\cmd.exe\" | where match(CommandLine, \"(?i)[\u0026|\u003e\u003c^]\") | table _time ComputerName User CommandLine"
+    "query": "index=sysmon EventCode=1 Image=\"C:\\\\Windows\\\\System32\\\\cmd.exe\" | where match(CommandLine, \"(?i)[&|><^]\") | table _time ComputerName User CommandLine"
   },
   {
     "source": "realworld_test",
     "name": "rex_multiple_captures",
-    "query": "index=web sourcetype=access_combined | rex field=_raw \"(?\u003cclient_ip\u003e\\d+\\.\\d+\\.\\d+\\.\\d+)\\s+-\\s+-\\s+\\[(?\u003ctimestamp\u003e[^\\]]+)\\]\\s+\\\"(?\u003cmethod\u003e\\w+)\\s+(?\u003curi\u003e[^\\s]+)\\s+(?\u003cprotocol\u003e[^\\\"]+)\\\"\\s+(?\u003cstatus\u003e\\d+)\\s+(?\u003cbytes\u003e\\d+)\" | table client_ip timestamp method uri status bytes"
+    "query": "index=web sourcetype=access_combined | rex field=_raw \"(?<client_ip>\\d+\\.\\d+\\.\\d+\\.\\d+)\\s+-\\s+-\\s+\\[(?<timestamp>[^\\]]+)\\]\\s+\\\"(?<method>\\w+)\\s+(?<uri>[^\\s]+)\\s+(?<protocol>[^\\\"]+)\\\"\\s+(?<status>\\d+)\\s+(?<bytes>\\d+)\" | table client_ip timestamp method uri status bytes"
   },
   {
     "source": "realworld_test",
@@ -227,17 +227,17 @@
   {
     "source": "realworld_test",
     "name": "eventstats_baseline",
-    "query": "index=firewall action=blocked | stats count as block_count by src_ip | eventstats avg(block_count) as avg_blocks stdev(block_count) as stdev_blocks | eval zscore=(block_count-avg_blocks)/stdev_blocks | where zscore \u003e 3"
+    "query": "index=firewall action=blocked | stats count as block_count by src_ip | eventstats avg(block_count) as avg_blocks stdev(block_count) as stdev_blocks | eval zscore=(block_count-avg_blocks)/stdev_blocks | where zscore > 3"
   },
   {
     "source": "realworld_test",
     "name": "mitre_scheduled_task",
-    "query": "index=windows sourcetype=WinEventLog:Security EventCode=4698 | rex field=Task_Content \"(?\u003ccommand\u003e\u003cCommand\u003e.*\u003c/Command\u003e)\" | table _time ComputerName SubjectUserName TaskName command"
+    "query": "index=windows sourcetype=WinEventLog:Security EventCode=4698 | rex field=Task_Content \"(?<command><Command>.*</Command>)\" | table _time ComputerName SubjectUserName TaskName command"
   },
   {
     "source": "realworld_test",
     "name": "mitre_credential_dump",
-    "query": "index=sysmon EventCode=10 TargetImage=\"*\\\\lsass.exe\" | stats count by SourceImage SourceUser Computer | where count \u003e 1"
+    "query": "index=sysmon EventCode=10 TargetImage=\"*\\\\lsass.exe\" | stats count by SourceImage SourceUser Computer | where count > 1"
   },
   {
     "source": "realworld_test",
@@ -252,7 +252,7 @@
   {
     "source": "realworld_test",
     "name": "fillnull_command",
-    "query": "index=web | stats count by status user | fillnull value=0 count | where count \u003c 10"
+    "query": "index=web | stats count by status user | fillnull value=0 count | where count < 10"
   },
   {
     "source": "realworld_test",
@@ -282,12 +282,12 @@
   {
     "source": "realworld_test",
     "name": "regex_multi_capture",
-    "query": "index=proxy | rex field=url \"https?://(?\u003cdomain\u003e[^/]+)(?\u003cpath\u003e/[^?]*)(\\?(?\u003cquery\u003e.*))?$\" | stats count by domain path"
+    "query": "index=proxy | rex field=url \"https?://(?<domain>[^/]+)(?<path>/[^?]*)(\\?(?<query>.*))?$\" | stats count by domain path"
   },
   {
     "source": "realworld_test",
     "name": "eventstats_multi_agg",
-    "query": "index=web | eventstats avg(response_time) as avg_time median(response_time) as median_time p95(response_time) as p95_time by endpoint | where response_time \u003e p95_time"
+    "query": "index=web | eventstats avg(response_time) as avg_time median(response_time) as median_time p95(response_time) as p95_time by endpoint | where response_time > p95_time"
   },
   {
     "source": "realworld_test",
@@ -317,7 +317,7 @@
   {
     "source": "realworld_test",
     "name": "rare_command",
-    "query": "index=dns | rare limit=20 query_type by src_ip | where count \u003c 5"
+    "query": "index=dns | rare limit=20 query_type by src_ip | where count < 5"
   },
   {
     "source": "realworld_test",
@@ -332,7 +332,7 @@
   {
     "source": "realworld_test",
     "name": "streamstats_window",
-    "query": "index=metrics | sort 0 _time | streamstats window=10 avg(value) as rolling_avg current=f by host | eval deviation=abs(value-rolling_avg) | where deviation \u003e 2"
+    "query": "index=metrics | sort 0 _time | streamstats window=10 avg(value) as rolling_avg current=f by host | eval deviation=abs(value-rolling_avg) | where deviation > 2"
   },
   {
     "source": "realworld_test",
@@ -367,12 +367,12 @@
   {
     "source": "realworld_test",
     "name": "complex_eval_case",
-    "query": "index=web | eval severity=case(status\u003e=500, \"critical\", status\u003e=400, \"warning\", status\u003e=300, \"info\", true(), \"ok\") | stats count by severity"
+    "query": "index=web | eval severity=case(status>=500, \"critical\", status>=400, \"warning\", status>=300, \"info\", true(), \"ok\") | stats count by severity"
   },
   {
     "source": "realworld_test",
     "name": "multisearch",
-    "query": "| multisearch [search index=web status\u003e=500] [search index=web status\u003e=400 status\u003c500] | stats count by index status"
+    "query": "| multisearch [search index=web status>=500] [search index=web status>=400 status<500] | stats count by index status"
   },
   {
     "source": "realworld_test",
@@ -382,12 +382,12 @@
   {
     "source": "realworld_test",
     "name": "inputlookup_where",
-    "query": "| inputlookup threat_intel.csv where threat_score\u003e80 | table indicator threat_type threat_score"
+    "query": "| inputlookup threat_intel.csv where threat_score>80 | table indicator threat_type threat_score"
   },
   {
     "source": "realworld_test",
     "name": "outputlookup",
-    "query": "index=firewall action=blocked | stats count by src_ip | where count\u003e100 | outputlookup blocked_ips.csv"
+    "query": "index=firewall action=blocked | stats count by src_ip | where count>100 | outputlookup blocked_ips.csv"
   },
   {
     "source": "realworld_test",
@@ -402,7 +402,7 @@
   {
     "source": "realworld_test",
     "name": "foreach_command",
-    "query": "index=metrics | stats avg(cpu) as cpu avg(memory) as memory by host | foreach cpu memory [eval \u003c\u003cFIELD\u003e\u003e_pct=round(\u003c\u003cFIELD\u003e\u003e*100, 2)]"
+    "query": "index=metrics | stats avg(cpu) as cpu avg(memory) as memory by host | foreach cpu memory [eval <<FIELD>>_pct=round(<<FIELD>>*100, 2)]"
   },
   {
     "source": "realworld_test",
@@ -412,7 +412,7 @@
   {
     "source": "realworld_test",
     "name": "autoregress",
-    "query": "index=metrics | sort _time | autoregress value as prev_value p=1 | eval change=value-prev_value | where change\u003e10"
+    "query": "index=metrics | sort _time | autoregress value as prev_value p=1 | eval change=value-prev_value | where change>10"
   },
   {
     "source": "realworld_test",
@@ -467,7 +467,7 @@
   {
     "source": "realworld_test",
     "name": "ad_lateral_movement_risk",
-    "query": "| tstats count min(_time) as firstTime max(_time) as lastTime sum(All_Risk.calculated_risk_score) as risk_score values(All_Risk.tag) as tag values(source) as source dc(source) as source_count from datamodel=Risk.All_Risk where All_Risk.risk_object_type=\"system\" by All_Risk.risk_object All_Risk.risk_object_type | where source_count\u003e=4"
+    "query": "| tstats count min(_time) as firstTime max(_time) as lastTime sum(All_Risk.calculated_risk_score) as risk_score values(All_Risk.tag) as tag values(source) as source dc(source) as source_count from datamodel=Risk.All_Risk where All_Risk.risk_object_type=\"system\" by All_Risk.risk_object All_Risk.risk_object_type | where source_count>=4"
   },
   {
     "source": "realworld_test",
@@ -697,22 +697,22 @@
   {
     "source": "realworld_test",
     "name": "truncation_rex",
-    "query": "index=_internal sourcetype=splunkd source=\"*splunkd.log\" log_level=\"WARN\" \"Truncating\" | rex \"line length \u003e= (?\u003cline_length\u003e\\\\d+)\" | stats values(host) as host count last(_raw) as common_events max(line_length) as max_line_length by data_sourcetype log_level | table host data_sourcetype log_level max_line_length count"
+    "query": "index=_internal sourcetype=splunkd source=\"*splunkd.log\" log_level=\"WARN\" \"Truncating\" | rex \"line length >= (?<line_length>\\\\d+)\" | stats values(host) as host count last(_raw) as common_events max(line_length) as max_line_length by data_sourcetype log_level | table host data_sourcetype log_level max_line_length count"
   },
   {
     "source": "realworld_test",
     "name": "missing_forwarders",
-    "query": "| REST /services/deployment/server/clients | eval difInSec=now()-lastPhoneHomeTime | eval time=strftime(lastPhoneHomeTime, \"%Y-%m-%d %H:%M:%S\") | search difInSec\u003e900 | table hostname ip time"
+    "query": "| REST /services/deployment/server/clients | eval difInSec=now()-lastPhoneHomeTime | eval time=strftime(lastPhoneHomeTime, \"%Y-%m-%d %H:%M:%S\") | search difInSec>900 | table hostname ip time"
   },
   {
     "source": "realworld_test",
     "name": "no_data_agents",
-    "query": "| tstats latest(_time) as latest where index=* earliest=-4d by host index sourcetype | eval recent=if(latest\u003erelative_time(now(), \"-360m\"), \"1\", \"0\"), LastReceiptTime=strftime(latest, \"%c\") | where recent=0 | sort LastReceiptTime | eval age=now()-latest | eval age=round((age/60/60), 1) | fields - recent latest"
+    "query": "| tstats latest(_time) as latest where index=* earliest=-4d by host index sourcetype | eval recent=if(latest>relative_time(now(), \"-360m\"), \"1\", \"0\"), LastReceiptTime=strftime(latest, \"%c\") | where recent=0 | sort LastReceiptTime | eval age=now()-latest | eval age=round((age/60/60), 1) | fields - recent latest"
   },
   {
     "source": "realworld_test",
     "name": "datamodel_coverage",
-    "query": "| tstats count WHERE index=* NOT index IN (sum_*, *summary, cim_*) by sourcetype | fields - count | append [| datamodel | rex field=_raw \"\\\"modelName\\\"\\\\s*\\\\:\\\\s*\\\"(?\u003cmodelName\u003e[^\\\"]+)\\\"\" | fields modelName | table modelName] | fillnull value=\"placeholder\" modelName | table modelName sourcetype count"
+    "query": "| tstats count WHERE index=* NOT index IN (sum_*, *summary, cim_*) by sourcetype | fields - count | append [| datamodel | rex field=_raw \"\\\"modelName\\\"\\\\s*\\\\:\\\\s*\\\"(?<modelName>[^\\\"]+)\\\"\" | fields modelName | table modelName] | fillnull value=\"placeholder\" modelName | table modelName sourcetype count"
   },
   {
     "source": "realworld_test",
@@ -732,7 +732,7 @@
   {
     "source": "realworld_test",
     "name": "ad_daily_activities",
-    "query": "index=wineventlog source=WinEventLog:Security src_nt_domain!=\"NT AUTHORITY\" EventCode=4720 OR EventCode=4726 OR EventCode=4738 OR EventCode=4767 | rex field=member_id \"^\\\\w+\\\\W(?\u003cITS_Admin\u003e\\\\w*\\\\s\\\\w*\\\\s\\\\w*|\\\\w+_\\\\w+|\\\\w*\\\\s\\\\w*|\\\\w*)(\\\\s\\\\w+\\\\W|\\\\s)(?\u003cTarget_Account\u003e.*\\\\S)\" | table _time EventCode src_nt_domain ITS_Admin Target_Account msad_action Group_Name"
+    "query": "index=wineventlog source=WinEventLog:Security src_nt_domain!=\"NT AUTHORITY\" EventCode=4720 OR EventCode=4726 OR EventCode=4738 OR EventCode=4767 | rex field=member_id \"^\\\\w+\\\\W(?<ITS_Admin>\\\\w*\\\\s\\\\w*\\\\s\\\\w*|\\\\w+_\\\\w+|\\\\w*\\\\s\\\\w*|\\\\w*)(\\\\s\\\\w+\\\\W|\\\\s)(?<Target_Account>.*\\\\S)\" | table _time EventCode src_nt_domain ITS_Admin Target_Account msad_action Group_Name"
   },
   {
     "source": "realworld_test",
@@ -742,12 +742,12 @@
   {
     "source": "realworld_test",
     "name": "ad_accounts_deleted_24h",
-    "query": "index=wineventlog source=WinEventLog:Security (EventCode=4726 OR EventCode=4720) | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \"Subject:\\\\s+\\\\w+\\\\s\\\\S+\\\\s+\\\\S+\\\\s+\\\\w+\\\\s\\\\w+:\\\\s+(?\u003cSourceAccount\u003e\\\\S+)\" | rex \"Target\\\\s\\\\w+:\\\\s+\\\\w+\\\\s\\\\w+:\\\\s+\\\\S+\\\\s+\\\\w+\\\\s\\\\w+:\\\\s+(?\u003cDeletedAccount\u003e\\\\S+)\" | transaction SuspectAccount startswith=\"EventCode=4720\" endswith=\"EventCode=4726\" | eval duration=round(((duration/60)/60)/24, 2) | table Date index host SourceAccount SuspectAccount duration"
+    "query": "index=wineventlog source=WinEventLog:Security (EventCode=4726 OR EventCode=4720) | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \"Subject:\\\\s+\\\\w+\\\\s\\\\S+\\\\s+\\\\S+\\\\s+\\\\w+\\\\s\\\\w+:\\\\s+(?<SourceAccount>\\\\S+)\" | rex \"Target\\\\s\\\\w+:\\\\s+\\\\w+\\\\s\\\\w+:\\\\s+\\\\S+\\\\s+\\\\w+\\\\s\\\\w+:\\\\s+(?<DeletedAccount>\\\\S+)\" | transaction SuspectAccount startswith=\"EventCode=4720\" endswith=\"EventCode=4726\" | eval duration=round(((duration/60)/60)/24, 2) | table Date index host SourceAccount SuspectAccount duration"
   },
   {
     "source": "realworld_test",
     "name": "ad_session_duration",
-    "query": "index=wineventlog source=WinEventLog:Security (EventCode=4624 OR EventCode=4634) (Logon_Type=2 OR Logon_Type=10) | eval Date=strftime(_time, \"%Y/%m/%d\") | eval LogonType=case(Logon_Type=\"2\", \"Local Console Access\", Logon_Type=\"10\", \"Remote Desktop\") | transaction host user startswith=EventCode=4624 endswith=EventCode=4634 | where duration\u003e5 | eval duration=duration/60 | table host user LogonType duration Date"
+    "query": "index=wineventlog source=WinEventLog:Security (EventCode=4624 OR EventCode=4634) (Logon_Type=2 OR Logon_Type=10) | eval Date=strftime(_time, \"%Y/%m/%d\") | eval LogonType=case(Logon_Type=\"2\", \"Local Console Access\", Logon_Type=\"10\", \"Remote Desktop\") | transaction host user startswith=EventCode=4624 endswith=EventCode=4634 | where duration>5 | eval duration=duration/60 | table host user LogonType duration Date"
   },
   {
     "source": "realworld_test",
@@ -757,7 +757,7 @@
   {
     "source": "realworld_test",
     "name": "linux_failed_logins",
-    "query": "index=linux sourcetype=linux_secure | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \".*:\\\\d{2}\\\\s(?\u003chostname\u003e\\\\S+)\" | rex \"gdm\\\\S+\\\\sauthentication\\\\s(?\u003cstatus\u003e\\\\w+)\" | rex \"\\\\suser[^'](?\u003cUser\u003e\\\\S+\\\\w+)\" | search status=failure | stats count as fails by Date User hostname | eval \"Alert Level\"=case(fails\u003e=50, \"Critical\", fails\u003c50 AND fails\u003e=20, \"Warning\", fails\u003c20, \"Normal\")"
+    "query": "index=linux sourcetype=linux_secure | eval Date=strftime(_time, \"%Y/%m/%d\") | rex \".*:\\\\d{2}\\\\s(?<hostname>\\\\S+)\" | rex \"gdm\\\\S+\\\\sauthentication\\\\s(?<status>\\\\w+)\" | rex \"\\\\suser[^'](?<User>\\\\S+\\\\w+)\" | search status=failure | stats count as fails by Date User hostname | eval \"Alert Level\"=case(fails>=50, \"Critical\", fails<50 AND fails>=20, \"Warning\", fails<20, \"Normal\")"
   },
   {
     "source": "realworld_test",
@@ -797,7 +797,7 @@
   {
     "source": "realworld_test",
     "name": "credit_card_luhn",
-    "query": "index=* (source IN (\"*.log\", \"*.bak\", \"*.txt\", \"*.csv\")) | rex max_match=1 \"[\\\"\\\\s\\\\'\\\\,]{0,1}(?\u003cCCMatch\u003e[\\\\d.\\\\-\\\\s]{11,24})[\\\"\\\\s\\\\'\\\\,]{0,1}\" | where isnotnull(CCMatch) | eval cc=tonumber(replace(CCMatch, \"[ -\\\\.]\", \"\")) | where len(cc)\u003e=14 AND len(cc)\u003c=16 | table _time CCMatch source sourcetype host"
+    "query": "index=* (source IN (\"*.log\", \"*.bak\", \"*.txt\", \"*.csv\")) | rex max_match=1 \"[\\\"\\\\s\\\\'\\\\,]{0,1}(?<CCMatch>[\\\\d.\\\\-\\\\s]{11,24})[\\\"\\\\s\\\\'\\\\,]{0,1}\" | where isnotnull(CCMatch) | eval cc=tonumber(replace(CCMatch, \"[ -\\\\.]\", \"\")) | where len(cc)>=14 AND len(cc)<=16 | table _time CCMatch source sourcetype host"
   },
   {
     "source": "realworld_test",
@@ -817,12 +817,12 @@
   {
     "source": "realworld_test",
     "name": "hosts_not_sending",
-    "query": "| tstats latest(_time) as lastLogTime by host | where lastLogTime\u003crelative_time(now(), \"-24h@h\") | eval time=strftime(lastLogTime, \"%Y-%m-%d %H:%M:%S\") | table host time | sort - time"
+    "query": "| tstats latest(_time) as lastLogTime by host | where lastLogTime<relative_time(now(), \"-24h@h\") | eval time=strftime(lastLogTime, \"%Y-%m-%d %H:%M:%S\") | table host time | sort - time"
   },
   {
     "source": "realworld_test",
     "name": "rex_special_chars",
-    "query": "index=web | rex field=_raw \"From: (?\u003cfrom\u003e.*) To: (?\u003cto\u003e.*)\""
+    "query": "index=web | rex field=_raw \"From: (?<from>.*) To: (?<to>.*)\""
   },
   {
     "source": "realworld_test",
@@ -857,7 +857,7 @@
   {
     "source": "realworld_test",
     "name": "eval_velocity",
-    "query": "index=metrics | eval velocity=distance/time | where velocity\u003e100"
+    "query": "index=metrics | eval velocity=distance/time | where velocity>100"
   },
   {
     "source": "realworld_test",
@@ -877,7 +877,7 @@
   {
     "source": "realworld_test",
     "name": "eventstats_max",
-    "query": "index=web | eventstats max(response_time) as max_rt by uri | eval is_slow=if(response_time\u003emax_rt*0.9, \"yes\", \"no\")"
+    "query": "index=web | eventstats max(response_time) as max_rt by uri | eval is_slow=if(response_time>max_rt*0.9, \"yes\", \"no\")"
   },
   {
     "source": "realworld_test",
@@ -887,7 +887,7 @@
   {
     "source": "realworld_test",
     "name": "where_functions",
-    "query": "index=main | where len(message)\u003e100 AND match(status, \"^[45]\\\\d{2}$\")"
+    "query": "index=main | where len(message)>100 AND match(status, \"^[45]\\\\d{2}$\")"
   },
   {
     "source": "realworld_test",
@@ -912,7 +912,7 @@
   {
     "source": "realworld_test",
     "name": "rex_max_match",
-    "query": "index=logs | rex max_match=0 field=message \"error: (?\u003cerrors\u003e[^,]+)\" | mvexpand errors | stats count by errors"
+    "query": "index=logs | rex max_match=0 field=message \"error: (?<errors>[^,]+)\" | mvexpand errors | stats count by errors"
   },
   {
     "source": "realworld_test",
@@ -922,7 +922,7 @@
   {
     "source": "realworld_test",
     "name": "stats_multi_agg",
-    "query": "index=web | stats count avg(response_time) as avg_rt max(response_time) as max_rt min(response_time) as min_rt stdev(response_time) as stdev_rt by uri | where count\u003e100"
+    "query": "index=web | stats count avg(response_time) as avg_rt max(response_time) as max_rt min(response_time) as min_rt stdev(response_time) as stdev_rt by uri | where count>100"
   },
   {
     "source": "realworld_test",
@@ -952,7 +952,7 @@
   {
     "source": "realworld_test",
     "name": "rare_countfield",
-    "query": "index=auth | rare limit=10 countfield=occurrences showperc=f user | where occurrences\u003c5"
+    "query": "index=auth | rare limit=10 countfield=occurrences showperc=f user | where occurrences<5"
   },
   {
     "source": "realworld_test",
@@ -973,5 +973,20 @@
     "source": "realworld_test",
     "name": "inputcsv_command",
     "query": "| inputcsv baseline.csv | append [search index=metrics | stats avg(value) by host] | stats first(value) as value by host"
+  },
+  {
+    "source": "grammar_test",
+    "name": "bare_wildcard_search",
+    "query": "* | stats count by host"
+  },
+  {
+    "source": "grammar_test",
+    "name": "bare_wildcard_with_where",
+    "query": "* | where status=200"
+  },
+  {
+    "source": "grammar_test",
+    "name": "wildcard_or_condition",
+    "query": "\"error\" OR * | head 10"
   }
 ]
