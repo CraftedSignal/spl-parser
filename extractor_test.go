@@ -254,11 +254,18 @@ func TestExtractConditions_ComputedFields(t *testing.T) {
 		t.Logf("Condition: %+v", c)
 	}
 
-	// cmd should NOT be in conditions (it's computed by eval)
+	// cmd should be in conditions but marked as computed
+	foundCmd := false
 	for _, c := range result.Conditions {
 		if strings.ToLower(c.Field) == "cmd" {
-			t.Errorf("Expected computed field 'cmd' to be excluded from conditions")
+			foundCmd = true
+			if !c.IsComputed {
+				t.Errorf("Expected computed field 'cmd' to be marked as IsComputed=true")
+			}
 		}
+	}
+	if !foundCmd {
+		t.Error("Expected computed field 'cmd' to be present in conditions")
 	}
 
 	// EventCode should be present
@@ -656,5 +663,262 @@ func TestExtractConditions_MetadataFiltering(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExtractConditions_FunctionConditions(t *testing.T) {
+	testCases := []struct {
+		name           string
+		query          string
+		expectedField  string
+		expectedOp     string
+		expectedValue  string
+	}{
+		{
+			name:          "cidrmatch",
+			query:         `index=network | where cidrmatch("10.0.0.0/8", src_ip)`,
+			expectedField: "src_ip",
+			expectedOp:    "cidrmatch",
+			expectedValue: "10.0.0.0/8",
+		},
+		{
+			name:          "match",
+			query:         `index=main | where match(CommandLine, "(?i)invoke-mimikatz")`,
+			expectedField: "CommandLine",
+			expectedOp:    "matches",
+			expectedValue: "(?i)invoke-mimikatz",
+		},
+		{
+			name:          "like",
+			query:         `index=main | where like(process_name, "%.exe")`,
+			expectedField: "process_name",
+			expectedOp:    "like",
+			expectedValue: "*.exe",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := ExtractConditions(tc.query)
+			t.Logf("Query: %s", tc.query)
+			t.Logf("Found %d conditions", len(result.Conditions))
+			for _, c := range result.Conditions {
+				t.Logf("  Condition: %+v", c)
+			}
+
+			// Find the function condition (skip index=)
+			var funcCond *Condition
+			for i, c := range result.Conditions {
+				if c.Operator == tc.expectedOp {
+					funcCond = &result.Conditions[i]
+					break
+				}
+			}
+
+			if funcCond == nil {
+				t.Errorf("Expected to find a %s condition", tc.expectedOp)
+				return
+			}
+
+			if funcCond.Field != tc.expectedField {
+				t.Errorf("Expected field %s, got %s", tc.expectedField, funcCond.Field)
+			}
+			if funcCond.Value != tc.expectedValue {
+				t.Errorf("Expected value %s, got %s", tc.expectedValue, funcCond.Value)
+			}
+		})
+	}
+}
+
+func TestExtractConditions_GroupByFields(t *testing.T) {
+	testCases := []struct {
+		name           string
+		query          string
+		expectedFields []string
+	}{
+		{
+			name:           "stats_single_field",
+			query:          `index=main | stats count by user`,
+			expectedFields: []string{"user"},
+		},
+		{
+			name:           "stats_multiple_fields",
+			query:          `index=main | stats count by user, host`,
+			expectedFields: []string{"user", "host"},
+		},
+		{
+			name:           "eventstats",
+			query:          `index=main | eventstats sum(bytes) by src_ip`,
+			expectedFields: []string{"src_ip"},
+		},
+		{
+			name:           "streamstats",
+			query:          `index=main | streamstats count by user`,
+			expectedFields: []string{"user"},
+		},
+		{
+			name:           "timechart",
+			query:          `index=main | timechart count by host`,
+			expectedFields: []string{"host"},
+		},
+		{
+			name:           "chart_by",
+			query:          `index=main | chart count by src_ip`,
+			expectedFields: []string{"src_ip"},
+		},
+		{
+			name:           "chart_by_over",
+			query:          `index=main | chart count by src_ip over time`,
+			expectedFields: []string{"time", "src_ip"},
+		},
+		{
+			name:           "no_by_clause",
+			query:          `index=main | stats count`,
+			expectedFields: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := ExtractConditions(tc.query)
+
+			t.Logf("Query: %s", tc.query)
+			t.Logf("GroupByFields: %v (expected: %v)", result.GroupByFields, tc.expectedFields)
+
+			if tc.expectedFields == nil {
+				if len(result.GroupByFields) != 0 {
+					t.Errorf("Expected no group-by fields, got %v", result.GroupByFields)
+				}
+				return
+			}
+
+			if len(result.GroupByFields) != len(tc.expectedFields) {
+				t.Errorf("Expected %d group-by fields, got %d: %v",
+					len(tc.expectedFields), len(result.GroupByFields), result.GroupByFields)
+				return
+			}
+
+			// Check each expected field is present (order may vary)
+			fieldSet := make(map[string]bool)
+			for _, f := range result.GroupByFields {
+				fieldSet[strings.ToLower(f)] = true
+			}
+			for _, expected := range tc.expectedFields {
+				if !fieldSet[strings.ToLower(expected)] {
+					t.Errorf("Expected group-by field %s not found in %v", expected, result.GroupByFields)
+				}
+			}
+		})
+	}
+}
+
+func TestJoinExtraction_Simple(t *testing.T) {
+	query := `index=main action="login" | join type=left user [search index=assets status="active"]`
+	result := ExtractConditions(query)
+
+	if len(result.Joins) != 1 {
+		t.Fatalf("Expected 1 join, got %d", len(result.Joins))
+	}
+
+	j := result.Joins[0]
+	if j.Type != "left" {
+		t.Errorf("Expected join type 'left', got %q", j.Type)
+	}
+	if len(j.JoinFields) != 1 || j.JoinFields[0] != "user" {
+		t.Errorf("Expected join fields [user], got %v", j.JoinFields)
+	}
+	if j.Subsearch == nil {
+		t.Fatal("Expected subsearch ParseResult, got nil")
+	}
+
+	hasStatus := false
+	for _, c := range j.Subsearch.Conditions {
+		if c.Field == "status" && c.Value == "active" {
+			hasStatus = true
+		}
+	}
+	if !hasStatus {
+		t.Error("Expected subsearch to contain status=active condition")
+	}
+}
+
+func TestSubsearchTextExtraction(t *testing.T) {
+	query := `index=main | join user [search index=assets department="engineering" | where risk_score > 50]`
+	result := ExtractConditions(query)
+
+	if len(result.Joins) == 0 {
+		t.Fatal("Expected at least 1 join")
+	}
+
+	sub := result.Joins[0].Subsearch
+	if sub == nil {
+		t.Fatal("Expected subsearch to be parsed")
+	}
+
+	hasDept := false
+	hasRisk := false
+	for _, c := range sub.Conditions {
+		if c.Field == "department" && c.Value == "engineering" {
+			hasDept = true
+		}
+		if c.Field == "risk_score" && c.Operator == ">" {
+			hasRisk = true
+		}
+	}
+	if !hasDept {
+		t.Error("Expected subsearch to have department=engineering")
+	}
+	if !hasRisk {
+		t.Error("Expected subsearch to have risk_score > 50")
+	}
+}
+
+func TestJoinExtraction_ExposedFields(t *testing.T) {
+	query := `index=auth EventID=4625 | join type=inner user [search index=endpoint EventID=4688 | where ParentProcessName="cmd.exe" | table user, ProcessName, ParentProcessName, ComputerName]`
+	result := ExtractConditions(query)
+
+	if len(result.Joins) == 0 {
+		t.Fatal("Expected at least 1 join")
+	}
+
+	j := result.Joins[0]
+
+	expectedExposed := map[string]bool{
+		"user": true, "ProcessName": true, "ParentProcessName": true, "ComputerName": true,
+	}
+	actualExposed := make(map[string]bool)
+	for _, f := range j.ExposedFields {
+		actualExposed[f] = true
+	}
+	for field := range expectedExposed {
+		if !actualExposed[field] {
+			t.Errorf("Expected exposed field %q not found in %v", field, j.ExposedFields)
+		}
+	}
+}
+
+func TestJoinExtraction_FieldProvenance(t *testing.T) {
+	query := `index=auth EventID=4625 | join type=inner user [search index=endpoint EventID=4688 | table user, ProcessName, ComputerName] | where ProcessName="*mimikatz*"`
+	result := ExtractConditions(query)
+
+	if len(result.Joins) == 0 {
+		t.Fatal("Expected at least 1 join")
+	}
+
+	tests := []struct {
+		field    string
+		expected FieldProvenance
+	}{
+		{"user", ProvenanceJoinKey},
+		{"ProcessName", ProvenanceJoined},
+		{"ComputerName", ProvenanceJoined},
+		{"EventID", ProvenanceMain},
+	}
+
+	for _, tc := range tests {
+		actual := ClassifyFieldProvenance(result, tc.field)
+		if actual != tc.expected {
+			t.Errorf("Field %q: expected provenance %q, got %q", tc.field, tc.expected, actual)
+		}
 	}
 }
