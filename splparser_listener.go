@@ -1,6 +1,6 @@
 // Code generated from SPLParser.g4 by ANTLR 4.13.2. DO NOT EDIT.
 
-package spl // SPLParser
+package spl
 
 import "github.com/antlr4-go/antlr/v4"
 
@@ -152,6 +152,12 @@ type SPLParserListener interface {
 	// EnterBucketOption is called when entering the bucketOption production.
 	EnterBucketOption(c *BucketOptionContext)
 
+	// EnterRestCommand is called when entering the restCommand production.
+	EnterRestCommand(c *RestCommandContext)
+
+	// EnterRestArg is called when entering the restArg production.
+	EnterRestArg(c *RestArgContext)
+
 	// EnterGenericCommand is called when entering the genericCommand production.
 	EnterGenericCommand(c *GenericCommandContext)
 
@@ -214,6 +220,9 @@ type SPLParserListener interface {
 
 	// EnterColonValue is called when entering the colonValue production.
 	EnterColonValue(c *ColonValueContext)
+
+	// EnterExtendedIdentifier is called when entering the extendedIdentifier production.
+	EnterExtendedIdentifier(c *ExtendedIdentifierContext)
 
 	// EnterWildcardValue is called when entering the wildcardValue production.
 	EnterWildcardValue(c *WildcardValueContext)
@@ -377,6 +386,12 @@ type SPLParserListener interface {
 	// ExitBucketOption is called when exiting the bucketOption production.
 	ExitBucketOption(c *BucketOptionContext)
 
+	// ExitRestCommand is called when exiting the restCommand production.
+	ExitRestCommand(c *RestCommandContext)
+
+	// ExitRestArg is called when exiting the restArg production.
+	ExitRestArg(c *RestArgContext)
+
 	// ExitGenericCommand is called when exiting the genericCommand production.
 	ExitGenericCommand(c *GenericCommandContext)
 
@@ -439,6 +454,9 @@ type SPLParserListener interface {
 
 	// ExitColonValue is called when exiting the colonValue production.
 	ExitColonValue(c *ColonValueContext)
+
+	// ExitExtendedIdentifier is called when exiting the extendedIdentifier production.
+	ExitExtendedIdentifier(c *ExtendedIdentifierContext)
 
 	// ExitWildcardValue is called when exiting the wildcardValue production.
 	ExitWildcardValue(c *WildcardValueContext)

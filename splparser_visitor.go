@@ -1,6 +1,6 @@
 // Code generated from SPLParser.g4 by ANTLR 4.13.2. DO NOT EDIT.
 
-package spl // SPLParser
+package spl
 
 import "github.com/antlr4-go/antlr/v4"
 
@@ -152,6 +152,12 @@ type SPLParserVisitor interface {
 	// Visit a parse tree produced by SPLParser#bucketOption.
 	VisitBucketOption(ctx *BucketOptionContext) interface{}
 
+	// Visit a parse tree produced by SPLParser#restCommand.
+	VisitRestCommand(ctx *RestCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#restArg.
+	VisitRestArg(ctx *RestArgContext) interface{}
+
 	// Visit a parse tree produced by SPLParser#genericCommand.
 	VisitGenericCommand(ctx *GenericCommandContext) interface{}
 
@@ -214,6 +220,9 @@ type SPLParserVisitor interface {
 
 	// Visit a parse tree produced by SPLParser#colonValue.
 	VisitColonValue(ctx *ColonValueContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#extendedIdentifier.
+	VisitExtendedIdentifier(ctx *ExtendedIdentifierContext) interface{}
 
 	// Visit a parse tree produced by SPLParser#wildcardValue.
 	VisitWildcardValue(ctx *WildcardValueContext) interface{}

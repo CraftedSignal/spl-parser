@@ -1,6 +1,6 @@
 // Code generated from SPLParser.g4 by ANTLR 4.13.2. DO NOT EDIT.
 
-package spl // SPLParser
+package spl
 
 import "github.com/antlr4-go/antlr/v4"
 
@@ -309,6 +309,18 @@ func (s *BaseSPLParserListener) EnterBucketOption(ctx *BucketOptionContext) {}
 // ExitBucketOption is called when production bucketOption is exited.
 func (s *BaseSPLParserListener) ExitBucketOption(ctx *BucketOptionContext) {}
 
+// EnterRestCommand is called when production restCommand is entered.
+func (s *BaseSPLParserListener) EnterRestCommand(ctx *RestCommandContext) {}
+
+// ExitRestCommand is called when production restCommand is exited.
+func (s *BaseSPLParserListener) ExitRestCommand(ctx *RestCommandContext) {}
+
+// EnterRestArg is called when production restArg is entered.
+func (s *BaseSPLParserListener) EnterRestArg(ctx *RestArgContext) {}
+
+// ExitRestArg is called when production restArg is exited.
+func (s *BaseSPLParserListener) ExitRestArg(ctx *RestArgContext) {}
+
 // EnterGenericCommand is called when production genericCommand is entered.
 func (s *BaseSPLParserListener) EnterGenericCommand(ctx *GenericCommandContext) {}
 
@@ -434,6 +446,12 @@ func (s *BaseSPLParserListener) EnterColonValue(ctx *ColonValueContext) {}
 
 // ExitColonValue is called when production colonValue is exited.
 func (s *BaseSPLParserListener) ExitColonValue(ctx *ColonValueContext) {}
+
+// EnterExtendedIdentifier is called when production extendedIdentifier is entered.
+func (s *BaseSPLParserListener) EnterExtendedIdentifier(ctx *ExtendedIdentifierContext) {}
+
+// ExitExtendedIdentifier is called when production extendedIdentifier is exited.
+func (s *BaseSPLParserListener) ExitExtendedIdentifier(ctx *ExtendedIdentifierContext) {}
 
 // EnterWildcardValue is called when production wildcardValue is entered.
 func (s *BaseSPLParserListener) EnterWildcardValue(ctx *WildcardValueContext) {}

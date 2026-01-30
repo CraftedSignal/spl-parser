@@ -1,6 +1,6 @@
 // Code generated from SPLParser.g4 by ANTLR 4.13.2. DO NOT EDIT.
 
-package spl // SPLParser
+package spl
 
 import "github.com/antlr4-go/antlr/v4"
 
@@ -200,6 +200,14 @@ func (v *BaseSPLParserVisitor) VisitBucketOption(ctx *BucketOptionContext) inter
 	return v.VisitChildren(ctx)
 }
 
+func (v *BaseSPLParserVisitor) VisitRestCommand(ctx *RestCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitRestArg(ctx *RestArgContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitGenericCommand(ctx *GenericCommandContext) interface{} {
 	return v.VisitChildren(ctx)
 }
@@ -281,6 +289,10 @@ func (v *BaseSPLParserVisitor) VisitValue(ctx *ValueContext) interface{} {
 }
 
 func (v *BaseSPLParserVisitor) VisitColonValue(ctx *ColonValueContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitExtendedIdentifier(ctx *ExtendedIdentifierContext) interface{} {
 	return v.VisitChildren(ctx)
 }
 

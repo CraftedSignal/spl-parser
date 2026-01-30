@@ -38,6 +38,7 @@ CONVERT     : [Cc][Oo][Nn][Vv][Ee][Rr][Tt] ;
 BUCKET      : [Bb][Uu][Cc][Kk][Ee][Tt] ;
 BIN         : [Bb][Ii][Nn] ;
 OVER        : [Oo][Vv][Ee][Rr] ;
+REST        : [Rr][Ee][Ss][Tt] ;
 
 // Comparison operators
 EQ          : '=' ;
@@ -98,6 +99,13 @@ IDENTIFIER
 
 // Dot operator (must be after NUMBER and IDENTIFIER to not interfere with decimals and nested fields)
 DOT         : '.' ;
+
+// REST API path (for rest command endpoints like /servicesNS/-/-/saved/searches)
+// Must have at least two segments to avoid consuming /Operational in sourcetype values
+// e.g., /services/endpoint NOT /endpoint
+REST_PATH
+    : '/' [a-zA-Z0-9_\-]+ '/' [a-zA-Z0-9_\-*]+ ('/' [a-zA-Z0-9_\-*]+)*
+    ;
 
 // Backtick macros
 MACRO

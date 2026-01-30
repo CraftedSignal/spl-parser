@@ -39,6 +39,7 @@ pipelineStage
     | formatCommand
     | convertCommand
     | bucketCommand
+    | restCommand
     | genericCommand
     ;
 
@@ -258,6 +259,19 @@ bucketOption
     : IDENTIFIER EQ (QUOTED_STRING | NUMBER | TIME_SPAN | IDENTIFIER)
     ;
 
+// Rest command for Splunk REST API queries
+// Syntax: | rest [options] <endpoint> [options]
+// Example: | rest timeout=600 splunk_server=local /servicesNS/-/-/saved/searches count=0
+restCommand
+    : REST restArg*
+    ;
+
+restArg
+    : IDENTIFIER EQ MINUS? (value | IDENTIFIER)   // option=value
+    | REST_PATH                                    // REST API path like /servicesNS/-/-/saved/searches
+    | IDENTIFIER                                   // endpoint without leading slash
+    ;
+
 // Generic command for unrecognized commands
 genericCommand
     : IDENTIFIER genericArg*
@@ -338,9 +352,9 @@ comparisonExpression
     | additiveExpression (comparisonOp additiveExpression)?
     ;
 
-// Additive expressions: + -
+// Additive expressions: + - . (DOT is string concatenation in SPL)
 additiveExpression
-    : multiplicativeExpression ((PLUS | MINUS) multiplicativeExpression)*
+    : multiplicativeExpression ((PLUS | MINUS | DOT) multiplicativeExpression)*
     ;
 
 // Multiplicative expressions: * / %
@@ -387,8 +401,14 @@ value
     ;
 
 // Colon-separated values (common in SPL for sourcetypes, eventtypes, etc.)
+// Allows hyphens and slashes within parts, e.g., WinEventLog:Microsoft-Windows-PowerShell/Operational
 colonValue
-    : IDENTIFIER (COLON IDENTIFIER)+
+    : extendedIdentifier (COLON extendedIdentifier)+
+    ;
+
+// Extended identifier allows hyphens and slashes (common in Windows event sourcetypes)
+extendedIdentifier
+    : IDENTIFIER ((MINUS | SLASH) IDENTIFIER)*
     ;
 
 // Wildcard values like *, access*, *access, *.php, *$
