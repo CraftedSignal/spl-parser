@@ -13,7 +13,13 @@ type QueryEntry struct {
 	Query  string `json:"query"`
 }
 
-// TestCorpus tests the SPL parser against the corpus of real-world queries
+// TestCorpus tests the SPL parser against the corpus of real-world queries.
+// Distinguishes between:
+// - success: conditions extracted with no errors
+// - partial: conditions extracted but with errors
+// - no_conditions: parsed cleanly but no filterable conditions (e.g., generating commands)
+// - failed: parse errors and no conditions (real parser failure)
+// - panic: parser crash
 func TestCorpus(t *testing.T) {
 	corpusPath := "testdata/corpus.json"
 
@@ -35,7 +41,7 @@ func TestCorpus(t *testing.T) {
 
 	t.Logf("Loaded %d queries from corpus", len(queries))
 
-	var success, partial, failed, panics int
+	var success, partial, noConditions, failed, panics int
 
 	for _, q := range queries {
 		func() {
@@ -52,21 +58,31 @@ func TestCorpus(t *testing.T) {
 				success++
 			} else if len(result.Conditions) > 0 {
 				partial++
-			} else {
+			} else if len(result.Errors) > 0 {
 				failed++
+				t.Logf("FAILED: %s — %v", q.Name, result.Errors)
+			} else {
+				// Parsed cleanly but no conditions — not a parser failure
+				noConditions++
 			}
 		}()
 	}
 
-	total := success + partial + failed + panics
-	t.Logf("Results: success=%d (%.1f%%), partial=%d (%.1f%%), failed=%d (%.1f%%), panics=%d",
-		success, float64(success)*100/float64(total),
-		partial, float64(partial)*100/float64(total),
-		failed, float64(failed)*100/float64(total),
-		panics)
+	total := len(queries)
+	testable := success + partial + failed + panics // excludes no-condition queries
+	t.Logf("Results: success=%d, partial=%d, no_conditions=%d, failed=%d, panics=%d (total=%d)",
+		success, partial, noConditions, failed, panics, total)
+	if testable > 0 {
+		parseRate := float64(success+partial) * 100 / float64(testable)
+		t.Logf("Parse rate (of testable queries): %.1f%%", parseRate)
+	}
 
 	if panics > 0 {
 		t.Errorf("Parser panicked on %d queries!", panics)
+	}
+
+	if failed > 0 {
+		t.Errorf("Parser failed on %d queries with errors", failed)
 	}
 }
 

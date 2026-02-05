@@ -1,7 +1,6 @@
 // Code generated from SPLParser.g4 by ANTLR 4.13.2. DO NOT EDIT.
 
-package spl
-
+package spl // SPLParser
 import "github.com/antlr4-go/antlr/v4"
 
 // BaseSPLParserListener is a complete listener for a parse tree produced by SPLParser.
@@ -320,6 +319,48 @@ func (s *BaseSPLParserListener) EnterRestArg(ctx *RestArgContext) {}
 
 // ExitRestArg is called when production restArg is exited.
 func (s *BaseSPLParserListener) ExitRestArg(ctx *RestArgContext) {}
+
+// EnterTstatsCommand is called when production tstatsCommand is entered.
+func (s *BaseSPLParserListener) EnterTstatsCommand(ctx *TstatsCommandContext) {}
+
+// ExitTstatsCommand is called when production tstatsCommand is exited.
+func (s *BaseSPLParserListener) ExitTstatsCommand(ctx *TstatsCommandContext) {}
+
+// EnterTstatsPreOption is called when production tstatsPreOption is entered.
+func (s *BaseSPLParserListener) EnterTstatsPreOption(ctx *TstatsPreOptionContext) {}
+
+// ExitTstatsPreOption is called when production tstatsPreOption is exited.
+func (s *BaseSPLParserListener) ExitTstatsPreOption(ctx *TstatsPreOptionContext) {}
+
+// EnterTstatsDatamodel is called when production tstatsDatamodel is entered.
+func (s *BaseSPLParserListener) EnterTstatsDatamodel(ctx *TstatsDatamodelContext) {}
+
+// ExitTstatsDatamodel is called when production tstatsDatamodel is exited.
+func (s *BaseSPLParserListener) ExitTstatsDatamodel(ctx *TstatsDatamodelContext) {}
+
+// EnterTstatsPostOption is called when production tstatsPostOption is entered.
+func (s *BaseSPLParserListener) EnterTstatsPostOption(ctx *TstatsPostOptionContext) {}
+
+// ExitTstatsPostOption is called when production tstatsPostOption is exited.
+func (s *BaseSPLParserListener) ExitTstatsPostOption(ctx *TstatsPostOptionContext) {}
+
+// EnterMstatsCommand is called when production mstatsCommand is entered.
+func (s *BaseSPLParserListener) EnterMstatsCommand(ctx *MstatsCommandContext) {}
+
+// ExitMstatsCommand is called when production mstatsCommand is exited.
+func (s *BaseSPLParserListener) ExitMstatsCommand(ctx *MstatsCommandContext) {}
+
+// EnterInputlookupCommand is called when production inputlookupCommand is entered.
+func (s *BaseSPLParserListener) EnterInputlookupCommand(ctx *InputlookupCommandContext) {}
+
+// ExitInputlookupCommand is called when production inputlookupCommand is exited.
+func (s *BaseSPLParserListener) ExitInputlookupCommand(ctx *InputlookupCommandContext) {}
+
+// EnterInputlookupOption is called when production inputlookupOption is entered.
+func (s *BaseSPLParserListener) EnterInputlookupOption(ctx *InputlookupOptionContext) {}
+
+// ExitInputlookupOption is called when production inputlookupOption is exited.
+func (s *BaseSPLParserListener) ExitInputlookupOption(ctx *InputlookupOptionContext) {}
 
 // EnterGenericCommand is called when production genericCommand is entered.
 func (s *BaseSPLParserListener) EnterGenericCommand(ctx *GenericCommandContext) {}

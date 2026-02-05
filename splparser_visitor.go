@@ -1,7 +1,6 @@
 // Code generated from SPLParser.g4 by ANTLR 4.13.2. DO NOT EDIT.
 
-package spl
-
+package spl // SPLParser
 import "github.com/antlr4-go/antlr/v4"
 
 // A complete Visitor for a parse tree produced by SPLParser.
@@ -157,6 +156,27 @@ type SPLParserVisitor interface {
 
 	// Visit a parse tree produced by SPLParser#restArg.
 	VisitRestArg(ctx *RestArgContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#tstatsCommand.
+	VisitTstatsCommand(ctx *TstatsCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#tstatsPreOption.
+	VisitTstatsPreOption(ctx *TstatsPreOptionContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#tstatsDatamodel.
+	VisitTstatsDatamodel(ctx *TstatsDatamodelContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#tstatsPostOption.
+	VisitTstatsPostOption(ctx *TstatsPostOptionContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#mstatsCommand.
+	VisitMstatsCommand(ctx *MstatsCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#inputlookupCommand.
+	VisitInputlookupCommand(ctx *InputlookupCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#inputlookupOption.
+	VisitInputlookupOption(ctx *InputlookupOptionContext) interface{}
 
 	// Visit a parse tree produced by SPLParser#genericCommand.
 	VisitGenericCommand(ctx *GenericCommandContext) interface{}

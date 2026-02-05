@@ -1,7 +1,6 @@
 // Code generated from SPLParser.g4 by ANTLR 4.13.2. DO NOT EDIT.
 
-package spl
-
+package spl // SPLParser
 import "github.com/antlr4-go/antlr/v4"
 
 type BaseSPLParserVisitor struct {
@@ -205,6 +204,34 @@ func (v *BaseSPLParserVisitor) VisitRestCommand(ctx *RestCommandContext) interfa
 }
 
 func (v *BaseSPLParserVisitor) VisitRestArg(ctx *RestArgContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitTstatsCommand(ctx *TstatsCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitTstatsPreOption(ctx *TstatsPreOptionContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitTstatsDatamodel(ctx *TstatsDatamodelContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitTstatsPostOption(ctx *TstatsPostOptionContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitMstatsCommand(ctx *MstatsCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitInputlookupCommand(ctx *InputlookupCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitInputlookupOption(ctx *InputlookupOptionContext) interface{} {
 	return v.VisitChildren(ctx)
 }
 

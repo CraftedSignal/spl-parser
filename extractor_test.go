@@ -897,6 +897,108 @@ func TestJoinExtraction_ExposedFields(t *testing.T) {
 	}
 }
 
+func TestTstatsCommand_Basic(t *testing.T) {
+	query := `| tstats count from datamodel=Endpoint.Processes by Processes.dest Processes.user`
+	result := ExtractConditions(query)
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	if len(result.Commands) == 0 || result.Commands[0] != "tstats" {
+		t.Errorf("Expected first command to be 'tstats', got %v", result.Commands)
+	}
+
+	if result.ComputedFields["_datamodel"] != "Endpoint.Processes" {
+		t.Errorf("Expected datamodel 'Endpoint.Processes', got %q", result.ComputedFields["_datamodel"])
+	}
+
+	expectedFields := map[string]bool{"Processes.dest": true, "Processes.user": true}
+	for _, f := range result.GroupByFields {
+		delete(expectedFields, f)
+	}
+	if len(expectedFields) > 0 {
+		t.Errorf("Missing group-by fields: %v (got %v)", expectedFields, result.GroupByFields)
+	}
+}
+
+func TestTstatsCommand_WithWhere(t *testing.T) {
+	// This was the known failure before tstats grammar was added
+	query := `| tstats count WHERE index=* BY index sourcetype`
+	result := ExtractConditions(query)
+
+	if len(result.Errors) > 0 {
+		t.Errorf("Unexpected errors: %v", result.Errors)
+	}
+
+	if len(result.Commands) == 0 || result.Commands[0] != "tstats" {
+		t.Errorf("Expected first command to be 'tstats', got %v", result.Commands)
+	}
+}
+
+func TestTstatsCommand_WithGroupBy(t *testing.T) {
+	query := `| tstats count from datamodel=Authentication groupby Authentication.src Authentication.action`
+	result := ExtractConditions(query)
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	if len(result.Commands) == 0 || result.Commands[0] != "tstats" {
+		t.Errorf("Expected first command to be 'tstats', got %v", result.Commands)
+	}
+
+	expectedFields := map[string]bool{"Authentication.src": true, "Authentication.action": true}
+	for _, f := range result.GroupByFields {
+		delete(expectedFields, f)
+	}
+	if len(expectedFields) > 0 {
+		t.Errorf("Missing group-by fields: %v (got %v)", expectedFields, result.GroupByFields)
+	}
+}
+
+func TestTstatsCommand_WithPreOption(t *testing.T) {
+	query := `| tstats summariesonly=t count from datamodel=Endpoint.Processes by Processes.dest`
+	result := ExtractConditions(query)
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	if len(result.Commands) == 0 || result.Commands[0] != "tstats" {
+		t.Errorf("Expected first command to be 'tstats', got %v", result.Commands)
+	}
+}
+
+func TestTstatsCommand_WithWhereAndPipeline(t *testing.T) {
+	query := `| tstats count where index=main earliest=-24h latest=now by _time span=1h host | timechart span=1h sum(count) by host`
+	result := ExtractConditions(query)
+
+	if len(result.Errors) > 0 {
+		t.Errorf("Unexpected errors: %v", result.Errors)
+	}
+
+	foundTstats := false
+	for _, cmd := range result.Commands {
+		if cmd == "tstats" {
+			foundTstats = true
+			break
+		}
+	}
+	if !foundTstats {
+		t.Errorf("Expected 'tstats' command, got %v", result.Commands)
+	}
+}
+
+func TestTstatsCommand_IsStatistical(t *testing.T) {
+	query := `| tstats count from datamodel=Endpoint.Processes by Processes.dest`
+	result := ExtractConditions(query)
+
+	if !IsStatisticalQuery(result) {
+		t.Error("Expected tstats query to be classified as statistical")
+	}
+}
+
 func TestJoinExtraction_FieldProvenance(t *testing.T) {
 	query := `index=auth EventID=4625 | join type=inner user [search index=endpoint EventID=4688 | table user, ProcessName, ComputerName] | where ProcessName="*mimikatz*"`
 	result := ExtractConditions(query)
@@ -920,5 +1022,159 @@ func TestJoinExtraction_FieldProvenance(t *testing.T) {
 		if actual != tc.expected {
 			t.Errorf("Field %q: expected provenance %q, got %q", tc.field, tc.expected, actual)
 		}
+	}
+}
+
+// ===== Mstats command tests =====
+
+func TestMstatsCommand_Basic(t *testing.T) {
+	query := `| mstats avg(_value) count(_value) WHERE metric_name="*.cpu.percent" by metric_name span=30s`
+	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	// Should extract the metric_name condition from WHERE
+	found := false
+	for _, c := range result.Conditions {
+		if c.Field == "metric_name" && c.Value == "*.cpu.percent" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Expected metric_name condition from mstats WHERE clause")
+		for _, c := range result.Conditions {
+			t.Logf("  Condition: %+v", c)
+		}
+	}
+
+	// Should have "mstats" in commands
+	hasMstats := false
+	for _, cmd := range result.Commands {
+		if cmd == "mstats" {
+			hasMstats = true
+		}
+	}
+	if !hasMstats {
+		t.Error("Expected 'mstats' in commands")
+	}
+
+	if !IsStatisticalQuery(result) {
+		t.Error("mstats should be classified as statistical query")
+	}
+}
+
+func TestMstatsCommand_ByFields(t *testing.T) {
+	query := `| mstats avg(_value) WHERE metric_name="os.cpu.percent" by host metric_name`
+	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	// Should extract BY fields
+	expectedFields := map[string]bool{"host": true, "metric_name": true}
+	for _, f := range result.GroupByFields {
+		delete(expectedFields, f)
+	}
+	if len(expectedFields) > 0 {
+		t.Errorf("Missing expected BY fields: %v, got: %v", expectedFields, result.GroupByFields)
+	}
+}
+
+// ===== Inputlookup command tests =====
+
+func TestInputlookupCommand_WithWhere(t *testing.T) {
+	query := `| inputlookup threat_intel.csv where threat_score>80 | table indicator threat_type threat_score`
+	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	// Should extract threat_score condition from WHERE
+	found := false
+	for _, c := range result.Conditions {
+		if c.Field == "threat_score" && c.Operator == ">" && c.Value == "80" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Expected threat_score>80 condition from inputlookup WHERE clause")
+		for _, c := range result.Conditions {
+			t.Logf("  Condition: %+v", c)
+		}
+	}
+
+	// Should have "inputlookup" in commands
+	hasInputlookup := false
+	for _, cmd := range result.Commands {
+		if cmd == "inputlookup" {
+			hasInputlookup = true
+		}
+	}
+	if !hasInputlookup {
+		t.Error("Expected 'inputlookup' in commands")
+	}
+}
+
+func TestInputlookupCommand_NoWhere(t *testing.T) {
+	query := `| inputlookup users.csv | table username email department`
+	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+	// No conditions expected since there's no WHERE clause
+	// Just verify it parses without errors
+}
+
+// ===== REST_PATH fix test =====
+
+func TestEvalDivision_NoRestPathConflict(t *testing.T) {
+	// Previously /60/60 was lexed as REST_PATH token instead of SLASH NUMBER SLASH NUMBER
+	query := `| tstats latest(_time) as latest where index=* by host | eval LatencyHours=(now()-latest)/60/60`
+	result := ExtractConditions(query)
+
+	// Should not have REST_PATH errors
+	for _, err := range result.Errors {
+		if strings.Contains(err, "extraneous input '/60/60'") {
+			t.Errorf("REST_PATH still consuming /60/60: %s", err)
+		}
+	}
+
+	// Should have eval command
+	hasEval := false
+	for _, cmd := range result.Commands {
+		if cmd == "eval" {
+			hasEval = true
+		}
+	}
+	if !hasEval {
+		t.Error("Expected 'eval' in commands")
+	}
+}
+
+// ===== ClassifyPipelineStages tests for new commands =====
+
+func TestClassifyPipelineStages_Mstats(t *testing.T) {
+	query := `| mstats avg(_value) WHERE metric_name="*.cpu.*" by host`
+	stages := ClassifyPipelineStages(query)
+	if len(stages) == 0 {
+		t.Fatal("Expected at least 1 stage")
+	}
+	if stages[0].CommandType != "mstats" {
+		t.Errorf("Expected command type 'mstats', got %q", stages[0].CommandType)
+	}
+	if !stages[0].IsAggregation {
+		t.Error("mstats should be classified as aggregation")
+	}
+}
+
+func TestClassifyPipelineStages_Inputlookup(t *testing.T) {
+	query := `| inputlookup threat_intel.csv where score>50 | table indicator score`
+	stages := ClassifyPipelineStages(query)
+	if len(stages) == 0 {
+		t.Fatal("Expected at least 1 stage")
+	}
+	if stages[0].CommandType != "inputlookup" {
+		t.Errorf("Expected command type 'inputlookup', got %q", stages[0].CommandType)
 	}
 }

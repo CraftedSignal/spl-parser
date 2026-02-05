@@ -40,6 +40,9 @@ pipelineStage
     | convertCommand
     | bucketCommand
     | restCommand
+    | tstatsCommand
+    | mstatsCommand
+    | inputlookupCommand
     | genericCommand
     ;
 
@@ -272,6 +275,46 @@ restArg
     | IDENTIFIER                                   // endpoint without leading slash
     ;
 
+// Tstats command for accelerated datamodel searches
+tstatsCommand
+    : TSTATS tstatsPreOption* statsFunction (COMMA? statsFunction)*
+      (FROM tstatsDatamodel)?
+      (WHERE searchExpression)?
+      ((BY | GROUPBY) (tstatsPostOption | fieldOrQuoted)+)?
+    ;
+
+tstatsPreOption
+    : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER | TIME_SPAN)
+    | MACRO
+    ;
+
+tstatsDatamodel
+    : IDENTIFIER EQ IDENTIFIER (DOT IDENTIFIER)*
+    | IDENTIFIER (DOT IDENTIFIER)*
+    ;
+
+tstatsPostOption
+    : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER | TIME_SPAN)
+    ;
+
+// Mstats command for metrics-store queries
+// Syntax: | mstats avg(_value) count(_value) WHERE metric_name="*.cpu.percent" by metric_name span=30s
+mstatsCommand
+    : MSTATS tstatsPreOption* statsFunction (COMMA? statsFunction)*
+      (WHERE searchExpression)?
+      ((BY | GROUPBY) (tstatsPostOption | fieldOrQuoted)+)?
+    ;
+
+// Inputlookup command with optional where clause
+// Syntax: | inputlookup [options] filename.csv [where condition]
+inputlookupCommand
+    : INPUTLOOKUP inputlookupOption* (IDENTIFIER | QUOTED_STRING) (WHERE expression)?
+    ;
+
+inputlookupOption
+    : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER)
+    ;
+
 // Generic command for unrecognized commands
 genericCommand
     : IDENTIFIER genericArg*
@@ -435,6 +478,9 @@ bareWord
 // Field name
 fieldName
     : IDENTIFIER
+    | FROM
+    | MSTATS
+    | INPUTLOOKUP
     ;
 
 // Field list (SPL allows both space-separated and comma-separated)

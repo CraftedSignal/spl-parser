@@ -1,7 +1,6 @@
 // Code generated from SPLParser.g4 by ANTLR 4.13.2. DO NOT EDIT.
 
-package spl
-
+package spl // SPLParser
 import "github.com/antlr4-go/antlr/v4"
 
 // SPLParserListener is a complete listener for a parse tree produced by SPLParser.
@@ -157,6 +156,27 @@ type SPLParserListener interface {
 
 	// EnterRestArg is called when entering the restArg production.
 	EnterRestArg(c *RestArgContext)
+
+	// EnterTstatsCommand is called when entering the tstatsCommand production.
+	EnterTstatsCommand(c *TstatsCommandContext)
+
+	// EnterTstatsPreOption is called when entering the tstatsPreOption production.
+	EnterTstatsPreOption(c *TstatsPreOptionContext)
+
+	// EnterTstatsDatamodel is called when entering the tstatsDatamodel production.
+	EnterTstatsDatamodel(c *TstatsDatamodelContext)
+
+	// EnterTstatsPostOption is called when entering the tstatsPostOption production.
+	EnterTstatsPostOption(c *TstatsPostOptionContext)
+
+	// EnterMstatsCommand is called when entering the mstatsCommand production.
+	EnterMstatsCommand(c *MstatsCommandContext)
+
+	// EnterInputlookupCommand is called when entering the inputlookupCommand production.
+	EnterInputlookupCommand(c *InputlookupCommandContext)
+
+	// EnterInputlookupOption is called when entering the inputlookupOption production.
+	EnterInputlookupOption(c *InputlookupOptionContext)
 
 	// EnterGenericCommand is called when entering the genericCommand production.
 	EnterGenericCommand(c *GenericCommandContext)
@@ -391,6 +411,27 @@ type SPLParserListener interface {
 
 	// ExitRestArg is called when exiting the restArg production.
 	ExitRestArg(c *RestArgContext)
+
+	// ExitTstatsCommand is called when exiting the tstatsCommand production.
+	ExitTstatsCommand(c *TstatsCommandContext)
+
+	// ExitTstatsPreOption is called when exiting the tstatsPreOption production.
+	ExitTstatsPreOption(c *TstatsPreOptionContext)
+
+	// ExitTstatsDatamodel is called when exiting the tstatsDatamodel production.
+	ExitTstatsDatamodel(c *TstatsDatamodelContext)
+
+	// ExitTstatsPostOption is called when exiting the tstatsPostOption production.
+	ExitTstatsPostOption(c *TstatsPostOptionContext)
+
+	// ExitMstatsCommand is called when exiting the mstatsCommand production.
+	ExitMstatsCommand(c *MstatsCommandContext)
+
+	// ExitInputlookupCommand is called when exiting the inputlookupCommand production.
+	ExitInputlookupCommand(c *InputlookupCommandContext)
+
+	// ExitInputlookupOption is called when exiting the inputlookupOption production.
+	ExitInputlookupOption(c *InputlookupOptionContext)
 
 	// ExitGenericCommand is called when exiting the genericCommand production.
 	ExitGenericCommand(c *GenericCommandContext)

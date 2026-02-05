@@ -525,6 +525,76 @@ func (e *conditionExtractor) ExitStatsFunction(ctx *StatsFunctionContext) {
 	e.inStatsFunction--
 }
 
+// EnterTstatsCommand extracts group-by fields, datamodel reference, and commands from tstats
+func (e *conditionExtractor) EnterTstatsCommand(ctx *TstatsCommandContext) {
+	e.commands = append(e.commands, "tstats")
+
+	// Extract BY/GROUPBY fields from fieldOrQuoted elements
+	for _, foq := range ctx.AllFieldOrQuoted() {
+		if foq.FieldName() != nil {
+			field := foq.FieldName().GetText()
+			fieldLower := strings.ToLower(field)
+			if !isExcludedField(fieldLower) {
+				e.groupByFields = append(e.groupByFields, field)
+			}
+		} else if foq.QUOTED_STRING() != nil {
+			field := strings.Trim(foq.QUOTED_STRING().GetText(), `"'`)
+			fieldLower := strings.ToLower(field)
+			if !isExcludedField(fieldLower) {
+				e.groupByFields = append(e.groupByFields, field)
+			}
+		}
+	}
+
+	// Extract datamodel reference
+	if ctx.TstatsDatamodel() != nil {
+		dm := ctx.TstatsDatamodel()
+		ids := dm.AllIDENTIFIER()
+		if dm.EQ() != nil && len(ids) >= 2 {
+			// "datamodel=Endpoint.Processes" — skip "datamodel" keyword
+			parts := make([]string, 0, len(ids)-1)
+			for _, id := range ids[1:] {
+				parts = append(parts, id.GetText())
+			}
+			e.computedFields["_datamodel"] = strings.Join(parts, ".")
+		} else {
+			// Plain "Endpoint.Processes"
+			parts := make([]string, 0, len(ids))
+			for _, id := range ids {
+				parts = append(parts, id.GetText())
+			}
+			e.computedFields["_datamodel"] = strings.Join(parts, ".")
+		}
+	}
+}
+
+// EnterMstatsCommand extracts group-by fields from mstats commands (metrics store)
+func (e *conditionExtractor) EnterMstatsCommand(ctx *MstatsCommandContext) {
+	e.commands = append(e.commands, "mstats")
+
+	// Extract BY/GROUPBY fields from fieldOrQuoted elements
+	for _, foq := range ctx.AllFieldOrQuoted() {
+		if foq.FieldName() != nil {
+			field := foq.FieldName().GetText()
+			fieldLower := strings.ToLower(field)
+			if !isExcludedField(fieldLower) {
+				e.groupByFields = append(e.groupByFields, field)
+			}
+		} else if foq.QUOTED_STRING() != nil {
+			field := strings.Trim(foq.QUOTED_STRING().GetText(), `"'`)
+			fieldLower := strings.ToLower(field)
+			if !isExcludedField(fieldLower) {
+				e.groupByFields = append(e.groupByFields, field)
+			}
+		}
+	}
+}
+
+// EnterInputlookupCommand extracts the command name for inputlookup
+func (e *conditionExtractor) EnterInputlookupCommand(ctx *InputlookupCommandContext) {
+	e.commands = append(e.commands, "inputlookup")
+}
+
 // EnterStatsCommand extracts group-by fields from stats commands
 func (e *conditionExtractor) EnterStatsCommand(ctx *StatsCommandContext) {
 	e.commands = append(e.commands, "stats")
@@ -1143,6 +1213,8 @@ func IsStatisticalQuery(result *ParseResult) bool {
 		"streamstats": true,
 		"chart":       true,
 		"timechart":   true,
+		"tstats":      true,
+		"mstats":      true,
 	}
 	for _, cmd := range result.Commands {
 		if statisticalCommands[cmd] {
@@ -1210,7 +1282,7 @@ type PipelineStageInfo struct {
 // unsuitable for single-event test validation
 var aggregationCommands = map[string]bool{
 	"stats": true, "eventstats": true, "streamstats": true,
-	"chart": true, "timechart": true,
+	"chart": true, "timechart": true, "tstats": true, "mstats": true,
 	"transaction": true, "dedup": true, "top": true, "rare": true,
 }
 
@@ -1385,6 +1457,15 @@ func classifyStage(stage IPipelineStageContext) string {
 	}
 	if stage.RestCommand() != nil {
 		return "rest"
+	}
+	if stage.TstatsCommand() != nil {
+		return "tstats"
+	}
+	if stage.MstatsCommand() != nil {
+		return "mstats"
+	}
+	if stage.InputlookupCommand() != nil {
+		return "inputlookup"
 	}
 	if stage.GenericCommand() != nil {
 		return "generic"

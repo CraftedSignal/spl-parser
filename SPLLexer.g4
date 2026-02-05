@@ -39,6 +39,11 @@ BUCKET      : [Bb][Uu][Cc][Kk][Ee][Tt] ;
 BIN         : [Bb][Ii][Nn] ;
 OVER        : [Oo][Vv][Ee][Rr] ;
 REST        : [Rr][Ee][Ss][Tt] ;
+TSTATS      : [Tt][Ss][Tt][Aa][Tt][Ss] ;
+FROM        : [Ff][Rr][Oo][Mm] ;
+GROUPBY     : [Gg][Rr][Oo][Uu][Pp][Bb][Yy] ;
+MSTATS      : [Mm][Ss][Tt][Aa][Tt][Ss] ;
+INPUTLOOKUP : [Ii][Nn][Pp][Uu][Tt][Ll][Oo][Oo][Kk][Uu][Pp] ;
 
 // Comparison operators
 EQ          : '=' ;
@@ -102,9 +107,10 @@ DOT         : '.' ;
 
 // REST API path (for rest command endpoints like /servicesNS/-/-/saved/searches)
 // Must have at least two segments to avoid consuming /Operational in sourcetype values
-// e.g., /services/endpoint NOT /endpoint
+// First segment must start with a letter to avoid consuming arithmetic like /60/60
+// e.g., /services/endpoint NOT /60/60
 REST_PATH
-    : '/' [a-zA-Z0-9_\-]+ '/' [a-zA-Z0-9_\-*]+ ('/' [a-zA-Z0-9_\-*]+)*
+    : '/' [a-zA-Z] [a-zA-Z0-9_\-]* '/' [a-zA-Z0-9_\-*]+ ('/' [a-zA-Z0-9_\-*]+)*
     ;
 
 // Backtick macros

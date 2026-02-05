@@ -1,4 +1,4 @@
-.PHONY: all test lint fmt generate clean
+.PHONY: all test lint fmt generate clean scrape-corpus
 
 all: test
 
@@ -23,6 +23,9 @@ clean:
 
 benchmark:
 	go test -bench=. -benchmem ./...
+
+scrape-corpus:
+	go run ./cmd/scrape-corpus $(DETECTIONS_DIR)
 
 coverage:
 	go test -coverprofile=coverage.out ./...
