@@ -280,6 +280,101 @@ func TestExtractConditions_ComputedFields(t *testing.T) {
 	}
 }
 
+func TestExtractConditions_StatsAliasComputedFields(t *testing.T) {
+	// Test that stats function aliases (count as events, dc(field) as alias)
+	// are registered as computed fields so post-aggregation filters are recognized
+	query := `index=windows EventCode=4688
+| stats count as events dc(Computer) as host_count by user
+| where events > 5`
+
+	result := ExtractConditions(query)
+
+	t.Logf("Parse errors: %v", result.Errors)
+	t.Logf("Computed fields: %v", result.ComputedFields)
+	t.Logf("Found %d conditions", len(result.Conditions))
+	for _, c := range result.Conditions {
+		t.Logf("Condition: %+v", c)
+	}
+
+	// "events" should be in ComputedFields (from "count as events")
+	if _, ok := result.ComputedFields["events"]; !ok {
+		t.Errorf("Expected 'events' to be in ComputedFields, got: %v", result.ComputedFields)
+	}
+
+	// "host_count" should be in ComputedFields (from "dc(Computer) as host_count")
+	if _, ok := result.ComputedFields["host_count"]; !ok {
+		t.Errorf("Expected 'host_count' to be in ComputedFields, got: %v", result.ComputedFields)
+	}
+
+	// The "events > 5" condition should be marked as computed
+	foundEventsCondition := false
+	for _, c := range result.Conditions {
+		if strings.ToLower(c.Field) == "events" {
+			foundEventsCondition = true
+			if !c.IsComputed {
+				t.Error("Expected 'events' condition to be marked IsComputed=true")
+			}
+			if c.SourceField == "" {
+				t.Error("Expected 'events' condition to have a SourceField")
+			}
+		}
+	}
+	if !foundEventsCondition {
+		t.Error("Expected to find 'events' condition from | where events > 5")
+	}
+}
+
+func TestExtractConditions_TransactionComputedFields(t *testing.T) {
+	// Test that transaction command's computed fields (duration, eventcount, closed_txn)
+	// are registered so post-transaction filters are recognized as computed
+	query := `index=web sourcetype=access_combined | transaction session_id maxpause=30m | where duration > 3600 | table session_id, duration, eventcount`
+
+	result := ExtractConditions(query)
+
+	t.Logf("Parse errors: %v", result.Errors)
+	t.Logf("Computed fields: %v", result.ComputedFields)
+	t.Logf("Found %d conditions", len(result.Conditions))
+	for _, c := range result.Conditions {
+		t.Logf("Condition: %+v", c)
+	}
+
+	// "duration" should be in ComputedFields (from transaction command)
+	if _, ok := result.ComputedFields["duration"]; !ok {
+		t.Errorf("Expected 'duration' to be in ComputedFields, got: %v", result.ComputedFields)
+	}
+
+	// "eventcount" should be in ComputedFields (from transaction command)
+	if _, ok := result.ComputedFields["eventcount"]; !ok {
+		t.Errorf("Expected 'eventcount' to be in ComputedFields, got: %v", result.ComputedFields)
+	}
+
+	// The "duration > 3600" condition should be marked as computed
+	foundDurationCondition := false
+	for _, c := range result.Conditions {
+		if strings.ToLower(c.Field) == "duration" {
+			foundDurationCondition = true
+			if !c.IsComputed {
+				t.Error("Expected 'duration' condition to be marked IsComputed=true")
+			}
+		}
+	}
+	if !foundDurationCondition {
+		t.Error("Expected to find 'duration' condition from | where duration > 3600")
+	}
+
+	// "transaction" command should be tracked
+	foundTransaction := false
+	for _, cmd := range result.Commands {
+		if cmd == "transaction" {
+			foundTransaction = true
+			break
+		}
+	}
+	if !foundTransaction {
+		t.Errorf("Expected 'transaction' in commands, got: %v", result.Commands)
+	}
+}
+
 func TestExtractConditions_ColonValue(t *testing.T) {
 	// Test colon-separated values on a non-metadata field
 	// index, sourcetype, host are metadata, so use eventtype instead
@@ -1176,5 +1271,51 @@ func TestClassifyPipelineStages_Inputlookup(t *testing.T) {
 	}
 	if stages[0].CommandType != "inputlookup" {
 		t.Errorf("Expected command type 'inputlookup', got %q", stages[0].CommandType)
+	}
+}
+
+func TestExtractConditions_NumericFieldName(t *testing.T) {
+	// Sysmon-style numeric field names (e.g., 3=3 means EventCode=3 for network connection)
+	query := `index=main sourcetype=sysmon 3=3 ParentImage="*\\WINWORD.EXE" Image="*\\powershell.exe"`
+
+	result := ExtractConditions(query)
+
+	if len(result.Errors) > 0 {
+		t.Logf("Parse errors: %v", result.Errors)
+	}
+
+	// Should extract all 5 conditions: index, sourcetype, 3, ParentImage, Image
+	if len(result.Conditions) != 5 {
+		t.Errorf("Expected 5 conditions, got %d", len(result.Conditions))
+		for _, c := range result.Conditions {
+			t.Logf("  %s %s %s", c.Field, c.Operator, c.Value)
+		}
+	}
+
+	// Verify the numeric field is extracted correctly
+	found3 := false
+	foundParentImage := false
+	foundImage := false
+	for _, c := range result.Conditions {
+		switch c.Field {
+		case "3":
+			found3 = true
+			if c.Value != "3" {
+				t.Errorf("Expected value '3' for field '3', got %q", c.Value)
+			}
+		case "ParentImage":
+			foundParentImage = true
+		case "Image":
+			foundImage = true
+		}
+	}
+	if !found3 {
+		t.Error("Expected to find numeric field '3' condition")
+	}
+	if !foundParentImage {
+		t.Error("Expected to find 'ParentImage' condition (should not be dropped after numeric field)")
+	}
+	if !foundImage {
+		t.Error("Expected to find 'Image' condition")
 	}
 }

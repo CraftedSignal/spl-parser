@@ -520,9 +520,26 @@ func (e *conditionExtractor) EnterStatsFunction(ctx *StatsFunctionContext) {
 	e.inStatsFunction++
 }
 
-// ExitStatsFunction tracks when we exit a stats function
+// ExitStatsFunction tracks when we exit a stats function.
+// It also registers any "AS alias" as a computed field so that post-aggregation
+// filters (e.g. | where events > 5) are recognized as operating on computed fields.
 func (e *conditionExtractor) ExitStatsFunction(ctx *StatsFunctionContext) {
 	e.inStatsFunction--
+
+	// If this stats function has an AS alias, register it as a computed field
+	if ctx.AS() != nil && ctx.FieldName() != nil {
+		alias := strings.ToLower(ctx.FieldName().GetText())
+		// The source is the expression inside the function, or the function name itself
+		sourceField := ""
+		if ctx.Expression() != nil {
+			sourceField = extractFirstFieldFromExpression(ctx.Expression())
+		}
+		if sourceField == "" {
+			// For functions like count (no expression), use the function name as source marker
+			sourceField = strings.ToLower(ctx.IDENTIFIER().GetText())
+		}
+		e.computedFields[alias] = sourceField
+	}
 }
 
 // EnterTstatsCommand extracts group-by fields, datamodel reference, and commands from tstats
@@ -716,6 +733,27 @@ func (e *conditionExtractor) EnterEvalCommand(ctx *EvalCommandContext) {
 // EnterWhereCommand tracks where commands
 func (e *conditionExtractor) EnterWhereCommand(ctx *WhereCommandContext) {
 	e.commands = append(e.commands, "where")
+}
+
+// EnterTransactionCommand tracks transaction commands and marks computed fields.
+// The transaction command computes several fields that don't exist in raw events:
+// - duration: seconds between first and last event in the transaction
+// - eventcount: number of events in the transaction
+// - closed_txn: 1 if the transaction was properly closed, 0 otherwise
+// These should not be expected in test data as they're computed by the command.
+func (e *conditionExtractor) EnterTransactionCommand(ctx *TransactionCommandContext) {
+	e.commands = append(e.commands, "transaction")
+
+	// Mark transaction-computed fields
+	// The source marker "_transaction" indicates these are computed by the transaction command
+	e.computedFields["duration"] = "_transaction"
+	e.computedFields["eventcount"] = "_transaction"
+	e.computedFields["closed_txn"] = "_transaction"
+
+	// Extract the grouping fields from transaction (these are the fields used to group events)
+	if ctx.FieldList() != nil {
+		e.extractByFields(ctx.FieldList())
+	}
 }
 
 // EnterRexCommand tracks rex commands and extracts computed fields from named capture groups

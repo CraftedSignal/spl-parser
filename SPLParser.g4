@@ -67,7 +67,7 @@ evalAssignment
 
 // Stats command
 statsCommand
-    : STATS statsFunction (COMMA statsFunction)* (BY fieldList)?
+    : STATS statsFunction (COMMA? statsFunction)* (BY fieldList)?
     ;
 
 statsFunction
@@ -185,12 +185,12 @@ spathOption
 
 // Eventstats command
 eventstatsCommand
-    : EVENTSTATS statsFunction (COMMA statsFunction)* (BY fieldList)?
+    : EVENTSTATS statsFunction (COMMA? statsFunction)* (BY fieldList)?
     ;
 
 // Streamstats command
 streamstatsCommand
-    : STREAMSTATS statsFunction (COMMA statsFunction)* (BY fieldList)?
+    : STREAMSTATS statsFunction (COMMA? statsFunction)* (BY fieldList)?
     ;
 
 // Timechart command
@@ -475,9 +475,10 @@ bareWord
     | wildcardValue  // Allows bare * or *value patterns as search terms
     ;
 
-// Field name
+// Field name (NUMBER included for Sysmon-style numeric field names like 3=3)
 fieldName
     : IDENTIFIER
+    | NUMBER
     | FROM
     | MSTATS
     | INPUTLOOKUP
