@@ -62,6 +62,8 @@ LPAREN      : '(' ;
 RPAREN      : ')' ;
 LBRACKET    : '[' ;
 RBRACKET    : ']' ;
+LBRACE      : '{' ;
+RBRACE      : '}' ;
 COMMA       : ',' ;
 COLON       : ':' ;
 DQUOTE      : '"' ;
@@ -95,6 +97,11 @@ WILDCARD    : '*' ;
 
 // Special pattern suffix (for Windows account patterns like *$)
 DOLLAR      : '$' ;
+
+// Template variables for foreach (e.g., <<FIELD>>, <<field>>)
+TEMPLATE_VAR
+    : '<<' [a-zA-Z_] [a-zA-Z0-9_]* '>>'
+    ;
 
 // Field names and identifiers (allowing dots for nested fields)
 IDENTIFIER

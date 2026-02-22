@@ -1,6 +1,6 @@
 // Code generated from SPLParser.g4 by ANTLR 4.13.2. DO NOT EDIT.
 
-package spl
+package spl // SPLParser
 
 import "github.com/antlr4-go/antlr/v4"
 
@@ -253,6 +253,9 @@ type SPLParserListener interface {
 
 	// EnterFieldName is called when entering the fieldName production.
 	EnterFieldName(c *FieldNameContext)
+
+	// EnterFieldNameBase is called when entering the fieldNameBase production.
+	EnterFieldNameBase(c *FieldNameBaseContext)
 
 	// EnterFieldList is called when entering the fieldList production.
 	EnterFieldList(c *FieldListContext)
@@ -508,6 +511,9 @@ type SPLParserListener interface {
 
 	// ExitFieldName is called when exiting the fieldName production.
 	ExitFieldName(c *FieldNameContext)
+
+	// ExitFieldNameBase is called when exiting the fieldNameBase production.
+	ExitFieldNameBase(c *FieldNameBaseContext)
 
 	// ExitFieldList is called when exiting the fieldList production.
 	ExitFieldList(c *FieldListContext)

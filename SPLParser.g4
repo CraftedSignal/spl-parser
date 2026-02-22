@@ -290,7 +290,7 @@ tstatsPreOption
 
 tstatsDatamodel
     : IDENTIFIER EQ IDENTIFIER (DOT IDENTIFIER)*
-    | IDENTIFIER (DOT IDENTIFIER)*
+    | IDENTIFIER (COLON IDENTIFIER)? (DOT IDENTIFIER)*
     ;
 
 tstatsPostOption
@@ -476,9 +476,17 @@ bareWord
     ;
 
 // Field name (NUMBER included for Sysmon-style numeric field names like 3=3)
+// Supports hyphenated names (c-uri, cs-user-agent) via IDENTIFIER (MINUS IDENTIFIER)*
+// Supports curly-brace fields (ModifiedProperties{}.NewValue) via LBRACE RBRACE
+// Supports template variables (<<FIELD>>) from foreach command
 fieldName
-    : IDENTIFIER
+    : fieldNameBase (LBRACE RBRACE (DOT fieldNameBase)*)?
     | NUMBER
+    | TEMPLATE_VAR
+    ;
+
+fieldNameBase
+    : IDENTIFIER (MINUS IDENTIFIER)*
     | FROM
     | MSTATS
     | INPUTLOOKUP

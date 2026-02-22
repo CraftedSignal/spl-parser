@@ -1,6 +1,6 @@
 // Code generated from SPLParser.g4 by ANTLR 4.13.2. DO NOT EDIT.
 
-package spl
+package spl // SPLParser
 
 import "github.com/antlr4-go/antlr/v4"
 
@@ -333,6 +333,10 @@ func (v *BaseSPLParserVisitor) VisitBareWord(ctx *BareWordContext) interface{} {
 }
 
 func (v *BaseSPLParserVisitor) VisitFieldName(ctx *FieldNameContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitFieldNameBase(ctx *FieldNameBaseContext) interface{} {
 	return v.VisitChildren(ctx)
 }
 

@@ -1,6 +1,6 @@
 // Code generated from SPLParser.g4 by ANTLR 4.13.2. DO NOT EDIT.
 
-package spl
+package spl // SPLParser
 
 import "github.com/antlr4-go/antlr/v4"
 
@@ -253,6 +253,9 @@ type SPLParserVisitor interface {
 
 	// Visit a parse tree produced by SPLParser#fieldName.
 	VisitFieldName(ctx *FieldNameContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#fieldNameBase.
+	VisitFieldNameBase(ctx *FieldNameBaseContext) interface{}
 
 	// Visit a parse tree produced by SPLParser#fieldList.
 	VisitFieldList(ctx *FieldListContext) interface{}

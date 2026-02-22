@@ -1274,6 +1274,95 @@ func TestClassifyPipelineStages_Inputlookup(t *testing.T) {
 	}
 }
 
+// ===== Production readiness: hyphenated fields, curly braces, template vars =====
+
+func TestExtractConditions_HyphenatedFieldNames(t *testing.T) {
+	// CIM fields like c-uri, cs-user-agent, sc-status are common in proxy/IIS logs
+	query := `index=proxy c-uri="*/malware/*" cs-user-agent="*bot*" sc-status=403`
+
+	result := ExtractConditions(query)
+
+	if len(result.Errors) > 0 {
+		t.Errorf("Unexpected errors for hyphenated fields: %v", result.Errors)
+	}
+
+	expected := map[string]string{
+		"index":         "proxy",
+		"c-uri":         "*/malware/*",
+		"cs-user-agent": "*bot*",
+		"sc-status":     "403",
+	}
+
+	fields := make(map[string]string)
+	for _, c := range result.Conditions {
+		fields[c.Field] = c.Value
+	}
+
+	for field, wantVal := range expected {
+		if gotVal, ok := fields[field]; !ok {
+			t.Errorf("Missing field %q", field)
+		} else if gotVal != wantVal {
+			t.Errorf("Field %q: expected %q, got %q", field, wantVal, gotVal)
+		}
+	}
+}
+
+func TestExtractConditions_CurlyBraceFields(t *testing.T) {
+	// Azure/O365 audit logs use curly-brace field syntax like ModifiedProperties{}.NewValue
+	query := `index=o365 ModifiedProperties{}.NewValue="*admin*"`
+
+	result := ExtractConditions(query)
+
+	if len(result.Errors) > 0 {
+		t.Errorf("Unexpected errors for curly-brace fields: %v", result.Errors)
+	}
+
+	found := false
+	for _, c := range result.Conditions {
+		if c.Field == "ModifiedProperties{}.NewValue" {
+			found = true
+			if c.Value != "*admin*" {
+				t.Errorf("Expected value '*admin*', got %q", c.Value)
+			}
+		}
+	}
+	if !found {
+		t.Error("Expected to find 'ModifiedProperties{}.NewValue' condition")
+		for _, c := range result.Conditions {
+			t.Logf("  %s %s %s", c.Field, c.Operator, c.Value)
+		}
+	}
+}
+
+func TestExtractConditions_TemplateVariable(t *testing.T) {
+	// foreach command uses <<FIELD>> template syntax
+	query := `index=main | foreach host src dest [| eval <<FIELD>>=upper(<<FIELD>>)]`
+
+	result := ExtractConditions(query)
+
+	// Should parse without errors (template vars are recognized as valid tokens)
+	for _, err := range result.Errors {
+		if strings.Contains(err, "<<") || strings.Contains(err, ">>") {
+			t.Errorf("Template variable caused parse error: %s", err)
+		}
+	}
+}
+
+func TestExtractConditions_TstatsDatamodelColon(t *testing.T) {
+	// tstats with from datamodel:Name syntax (colon instead of =)
+	query := `| tstats count from datamodel:Network_Traffic.All_Traffic by All_Traffic.dest`
+
+	result := ExtractConditions(query)
+
+	if len(result.Errors) > 0 {
+		t.Errorf("Unexpected errors for datamodel colon syntax: %v", result.Errors)
+	}
+
+	if len(result.Commands) == 0 || result.Commands[0] != "tstats" {
+		t.Errorf("Expected 'tstats' command, got %v", result.Commands)
+	}
+}
+
 func TestExtractConditions_NumericFieldName(t *testing.T) {
 	// Sysmon-style numeric field names (e.g., 3=3 means EventCode=3 for network connection)
 	query := `index=main sourcetype=sysmon 3=3 ParentImage="*\\WINWORD.EXE" Image="*\\powershell.exe"`

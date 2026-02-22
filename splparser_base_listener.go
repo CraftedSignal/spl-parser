@@ -1,6 +1,6 @@
 // Code generated from SPLParser.g4 by ANTLR 4.13.2. DO NOT EDIT.
 
-package spl
+package spl // SPLParser
 
 import "github.com/antlr4-go/antlr/v4"
 
@@ -512,6 +512,12 @@ func (s *BaseSPLParserListener) EnterFieldName(ctx *FieldNameContext) {}
 
 // ExitFieldName is called when production fieldName is exited.
 func (s *BaseSPLParserListener) ExitFieldName(ctx *FieldNameContext) {}
+
+// EnterFieldNameBase is called when production fieldNameBase is entered.
+func (s *BaseSPLParserListener) EnterFieldNameBase(ctx *FieldNameBaseContext) {}
+
+// ExitFieldNameBase is called when production fieldNameBase is exited.
+func (s *BaseSPLParserListener) ExitFieldNameBase(ctx *FieldNameBaseContext) {}
 
 // EnterFieldList is called when production fieldList is entered.
 func (s *BaseSPLParserListener) EnterFieldList(ctx *FieldListContext) {}
