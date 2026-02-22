@@ -482,7 +482,7 @@ bareWord
 fieldName
     : fieldNameBase (LBRACE RBRACE (DOT fieldNameBase)*)?
     | NUMBER
-    | TEMPLATE_VAR
+    | TEMPLATE_VAR IDENTIFIER?     // <<FIELD>> or <<FIELD>>_pct
     ;
 
 fieldNameBase

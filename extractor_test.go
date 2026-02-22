@@ -1348,6 +1348,20 @@ func TestExtractConditions_TemplateVariable(t *testing.T) {
 	}
 }
 
+func TestExtractConditions_TemplateVariableWithSuffix(t *testing.T) {
+	// <<FIELD>>_pct pattern: template var concatenated with identifier suffix
+	query := `index=metrics | stats avg(cpu) as cpu avg(memory) as memory by host | foreach cpu memory [eval <<FIELD>>_pct=round(<<FIELD>>*100, 2)]`
+
+	result := ExtractConditions(query)
+
+	// Should parse without errors
+	for _, err := range result.Errors {
+		if strings.Contains(err, "_pct") || strings.Contains(err, "<<") {
+			t.Errorf("Template variable with suffix caused parse error: %s", err)
+		}
+	}
+}
+
 func TestExtractConditions_TstatsDatamodelColon(t *testing.T) {
 	// tstats with from datamodel:Name syntax (colon instead of =)
 	query := `| tstats count from datamodel:Network_Traffic.All_Traffic by All_Traffic.dest`
