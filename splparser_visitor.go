@@ -253,6 +253,9 @@ type SPLParserVisitor interface {
 	// Visit a parse tree produced by SPLParser#fieldName.
 	VisitFieldName(ctx *FieldNameContext) interface{}
 
+	// Visit a parse tree produced by SPLParser#fieldNameSuffix.
+	VisitFieldNameSuffix(ctx *FieldNameSuffixContext) interface{}
+
 	// Visit a parse tree produced by SPLParser#fieldNameBase.
 	VisitFieldNameBase(ctx *FieldNameBaseContext) interface{}
 

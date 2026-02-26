@@ -512,6 +512,12 @@ func (s *BaseSPLParserListener) EnterFieldName(ctx *FieldNameContext) {}
 // ExitFieldName is called when production fieldName is exited.
 func (s *BaseSPLParserListener) ExitFieldName(ctx *FieldNameContext) {}
 
+// EnterFieldNameSuffix is called when production fieldNameSuffix is entered.
+func (s *BaseSPLParserListener) EnterFieldNameSuffix(ctx *FieldNameSuffixContext) {}
+
+// ExitFieldNameSuffix is called when production fieldNameSuffix is exited.
+func (s *BaseSPLParserListener) ExitFieldNameSuffix(ctx *FieldNameSuffixContext) {}
+
 // EnterFieldNameBase is called when production fieldNameBase is entered.
 func (s *BaseSPLParserListener) EnterFieldNameBase(ctx *FieldNameBaseContext) {}
 

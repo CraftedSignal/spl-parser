@@ -253,6 +253,9 @@ type SPLParserListener interface {
 	// EnterFieldName is called when entering the fieldName production.
 	EnterFieldName(c *FieldNameContext)
 
+	// EnterFieldNameSuffix is called when entering the fieldNameSuffix production.
+	EnterFieldNameSuffix(c *FieldNameSuffixContext)
+
 	// EnterFieldNameBase is called when entering the fieldNameBase production.
 	EnterFieldNameBase(c *FieldNameBaseContext)
 
@@ -510,6 +513,9 @@ type SPLParserListener interface {
 
 	// ExitFieldName is called when exiting the fieldName production.
 	ExitFieldName(c *FieldNameContext)
+
+	// ExitFieldNameSuffix is called when exiting the fieldNameSuffix production.
+	ExitFieldNameSuffix(c *FieldNameSuffixContext)
 
 	// ExitFieldNameBase is called when exiting the fieldNameBase production.
 	ExitFieldNameBase(c *FieldNameBaseContext)

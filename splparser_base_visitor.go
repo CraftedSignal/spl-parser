@@ -335,6 +335,10 @@ func (v *BaseSPLParserVisitor) VisitFieldName(ctx *FieldNameContext) interface{}
 	return v.VisitChildren(ctx)
 }
 
+func (v *BaseSPLParserVisitor) VisitFieldNameSuffix(ctx *FieldNameSuffixContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitFieldNameBase(ctx *FieldNameBaseContext) interface{} {
 	return v.VisitChildren(ctx)
 }

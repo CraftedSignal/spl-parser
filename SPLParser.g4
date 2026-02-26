@@ -427,6 +427,8 @@ functionCall
     | MATCH LPAREN argumentList RPAREN
     | LIKE LPAREN argumentList RPAREN
     | CIDRMATCH LPAREN argumentList RPAREN
+    | ISNOTNULL LPAREN argumentList RPAREN
+    | ISNULL LPAREN argumentList RPAREN
     ;
 
 argumentList
@@ -480,9 +482,16 @@ bareWord
 // Supports curly-brace fields (ModifiedProperties{}.NewValue) via LBRACE RBRACE
 // Supports template variables (<<FIELD>>) from foreach command
 fieldName
-    : fieldNameBase (LBRACE RBRACE (DOT fieldNameBase)*)?
+    : fieldNameBase (fieldNameSuffix (DOT fieldNameBase fieldNameSuffix?)*)?
     | NUMBER
     | TEMPLATE_VAR IDENTIFIER?     // <<FIELD>> or <<FIELD>>_pct
+    ;
+
+// Optional suffix on a field path segment: {} (curly brace), [*] (array wildcard), or [N] (array index)
+fieldNameSuffix
+    : LBRACE RBRACE                                // ModifiedProperties{}.NewValue
+    | LBRACKET WILDCARD RBRACKET                    // targetResources[*].displayName
+    | LBRACKET NUMBER RBRACKET                      // items[0].value
     ;
 
 fieldNameBase

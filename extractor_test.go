@@ -1094,6 +1094,74 @@ func TestTstatsCommand_IsStatistical(t *testing.T) {
 	}
 }
 
+func TestIsnotnull_Extraction(t *testing.T) {
+	query := `index=main | where isnotnull(process_name)`
+	result := ExtractConditions(query)
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	found := false
+	for _, c := range result.Conditions {
+		if c.Field == "process_name" && c.Operator == "isnotnull" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Expected isnotnull condition for process_name")
+	}
+}
+
+func TestIsnull_Extraction(t *testing.T) {
+	query := `index=main | where isnull(user_name)`
+	result := ExtractConditions(query)
+
+	found := false
+	for _, c := range result.Conditions {
+		if c.Field == "user_name" && c.Operator == "isnull" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Expected isnull condition for user_name")
+	}
+}
+
+func TestMatch_MultilineRegex(t *testing.T) {
+	query := "index=main | where match(process, \"(?ix) cmd .* https?://\\d{1,3}\n\\.\\d{1,3}\n\")"
+	result := ExtractConditions(query)
+
+	found := false
+	for _, c := range result.Conditions {
+		if c.Field == "process" && c.Operator == "matches" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Expected match condition for process with multiline regex")
+	}
+}
+
+func TestFieldName_ArrayWildcard(t *testing.T) {
+	query := `properties.targetResources[*].displayName="something"`
+	result := ExtractConditions(query)
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	found := false
+	for _, c := range result.Conditions {
+		if c.Value == "something" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Expected condition with value 'something', got %v", result.Conditions)
+	}
+}
+
 func TestTstatsCommand_WithoutStatsFunction(t *testing.T) {
 	query := `| tstats summariesonly=t from datamodel=Endpoint.Processes where Processes.process_name="cmd.exe" by Processes.dest`
 	result := ExtractConditions(query)

@@ -505,6 +505,50 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 		return // Don't increment inFunctionCall for these
 	}
 
+	// Check for isnotnull(field) - extracts an exists condition
+	if ctx.ISNOTNULL() != nil {
+		args := ctx.ArgumentList()
+		if args != nil {
+			allArgs := args.AllExpression()
+			if len(allArgs) >= 1 {
+				field := allArgs[0].GetText()
+				cond := Condition{
+					Field:     field,
+					Operator:  "isnotnull",
+					Value:     "",
+					Negated:   e.negated,
+					PipeStage: e.currentStage,
+					LogicalOp: e.lastLogicalOp,
+				}
+				e.conditions = append(e.conditions, cond)
+				e.lastLogicalOp = "AND"
+			}
+		}
+		return
+	}
+
+	// Check for isnull(field) - extracts a null check condition
+	if ctx.ISNULL() != nil {
+		args := ctx.ArgumentList()
+		if args != nil {
+			allArgs := args.AllExpression()
+			if len(allArgs) >= 1 {
+				field := allArgs[0].GetText()
+				cond := Condition{
+					Field:     field,
+					Operator:  "isnull",
+					Value:     "",
+					Negated:   e.negated,
+					PipeStage: e.currentStage,
+					LogicalOp: e.lastLogicalOp,
+				}
+				e.conditions = append(e.conditions, cond)
+				e.lastLogicalOp = "AND"
+			}
+		}
+		return
+	}
+
 	// For other function calls, track depth to skip nested conditions
 	e.inFunctionCall++
 }

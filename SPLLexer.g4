@@ -55,6 +55,8 @@ GTE         : '>=' ;
 LIKE        : [Ll][Ii][Kk][Ee] ;
 MATCH       : [Mm][Aa][Tt][Cc][Hh] ;
 CIDRMATCH   : [Cc][Ii][Dd][Rr][Mm][Aa][Tt][Cc][Hh] ;
+ISNOTNULL   : [Ii][Ss][Nn][Oo][Tt][Nn][Uu][Ll][Ll] ;
+ISNULL      : [Ii][Ss][Nn][Uu][Ll][Ll] ;
 
 // Delimiters
 PIPE        : '|' ;
@@ -72,10 +74,10 @@ MINUS       : '-' ;
 SLASH       : '/' ;
 PERCENT     : '%' ;
 
-// String literals
+// String literals (allow embedded newlines for multiline regex in match() etc.)
 QUOTED_STRING
-    : '"' (~["\\\r\n] | '\\' .)* '"'
-    | '\'' (~['\\\r\n] | '\\' .)* '\''
+    : '"' (~["\\] | '\\' .)* '"'
+    | '\'' (~['\\] | '\\' .)* '\''
     ;
 
 // Time span values (must be before NUMBER to match span=1h, -24h, etc.)
