@@ -1094,6 +1094,62 @@ func TestTstatsCommand_IsStatistical(t *testing.T) {
 	}
 }
 
+func TestTstatsCommand_WithoutStatsFunction(t *testing.T) {
+	query := `| tstats summariesonly=t from datamodel=Endpoint.Processes where Processes.process_name="cmd.exe" by Processes.dest`
+	result := ExtractConditions(query)
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	if len(result.Commands) == 0 || result.Commands[0] != "tstats" {
+		t.Errorf("Expected first command to be 'tstats', got %v", result.Commands)
+	}
+
+	found := false
+	for _, c := range result.Conditions {
+		if c.Field == "Processes.process_name" && c.Value == "cmd.exe" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected condition for Processes.process_name=cmd.exe")
+	}
+}
+
+func TestStatsFunction_QuotedAlias(t *testing.T) {
+	query := `index=main | stats count AS "Total Count" by host`
+	result := ExtractConditions(query)
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	foundIndex := false
+	for _, c := range result.Conditions {
+		if c.Field == "index" && c.Value == "main" {
+			foundIndex = true
+		}
+	}
+	if !foundIndex {
+		t.Error("Expected condition for index=main")
+	}
+}
+
+func TestTstatsCommand_QuotedAlias(t *testing.T) {
+	query := `| tstats count AS "Total Events" from datamodel=Endpoint.Processes by Processes.dest`
+	result := ExtractConditions(query)
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	if len(result.Commands) == 0 || result.Commands[0] != "tstats" {
+		t.Errorf("Expected first command to be 'tstats', got %v", result.Commands)
+	}
+}
+
 func TestJoinExtraction_FieldProvenance(t *testing.T) {
 	query := `index=auth EventID=4625 | join type=inner user [search index=endpoint EventID=4688 | table user, ProcessName, ComputerName] | where ProcessName="*mimikatz*"`
 	result := ExtractConditions(query)

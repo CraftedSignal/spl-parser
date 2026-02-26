@@ -71,8 +71,8 @@ statsCommand
     ;
 
 statsFunction
-    : IDENTIFIER LPAREN expression? RPAREN (AS fieldName)?  // count(), sum(bytes)
-    | IDENTIFIER (AS fieldName)?                             // count, dc(distinct count) without parens
+    : IDENTIFIER LPAREN expression? RPAREN (AS (fieldName | QUOTED_STRING))?  // count(), sum(bytes)
+    | IDENTIFIER (AS (fieldName | QUOTED_STRING))?                             // count, dc(distinct count) without parens
     ;
 
 // Table command
@@ -277,7 +277,7 @@ restArg
 
 // Tstats command for accelerated datamodel searches
 tstatsCommand
-    : TSTATS tstatsPreOption* statsFunction (COMMA? statsFunction)*
+    : TSTATS tstatsPreOption* (statsFunction (COMMA? statsFunction)*)?
       (FROM tstatsDatamodel)?
       (WHERE searchExpression)?
       ((BY | GROUPBY) (tstatsPostOption | fieldOrQuoted)+)?
@@ -300,7 +300,7 @@ tstatsPostOption
 // Mstats command for metrics-store queries
 // Syntax: | mstats avg(_value) count(_value) WHERE metric_name="*.cpu.percent" by metric_name span=30s
 mstatsCommand
-    : MSTATS tstatsPreOption* statsFunction (COMMA? statsFunction)*
+    : MSTATS tstatsPreOption* (statsFunction (COMMA? statsFunction)*)?
       (WHERE searchExpression)?
       ((BY | GROUPBY) (tstatsPostOption | fieldOrQuoted)+)?
     ;
