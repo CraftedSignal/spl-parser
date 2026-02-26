@@ -30,6 +30,7 @@ type ParseResult struct {
 	Conditions     []Condition       `json:"conditions"`
 	GroupByFields  []string          `json:"group_by_fields,omitempty"`  // Fields from stats/eventstats/streamstats BY clauses
 	ComputedFields map[string]string `json:"computed_fields,omitempty"`  // Map of computed field name -> source field (from eval/rex)
+	FieldAliases   map[string]string `json:"field_aliases,omitempty"`   // Map of new name -> original name (from rename)
 	Commands       []string          `json:"commands,omitempty"`         // List of commands used in the query (stats, eventstats, etc.)
 	Joins          []JoinInfo        `json:"joins,omitempty"`            // Extracted join/append info
 	Errors         []string          `json:"errors,omitempty"`
@@ -106,6 +107,7 @@ type conditionExtractor struct {
 	conditions      []Condition
 	groupByFields   []string          // Fields from stats BY clauses
 	computedFields  map[string]string // Fields created by eval commands: computed field -> source field
+	fieldAliases    map[string]string // Rename mappings: new name -> original name
 	commands        []string          // Commands used in the query (stats, eventstats, etc.)
 	joins           []JoinInfo        // Extracted join info
 	currentStage    int
@@ -184,6 +186,7 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 	extractor := &conditionExtractor{
 		conditions:     make([]Condition, 0),
 		computedFields: make(map[string]string), // computed field -> source field
+		fieldAliases:   make(map[string]string), // rename mappings: new name -> original name
 		commands:       make([]string, 0),
 		joins:          make([]JoinInfo, 0),
 		lastLogicalOp:  "AND", // default
@@ -203,6 +206,7 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 		Conditions:     conditions,
 		GroupByFields:  extractor.groupByFields,
 		ComputedFields: extractor.computedFields,
+		FieldAliases:   extractor.fieldAliases,
 		Commands:       extractor.commands,
 		Joins:          extractor.joins,
 		Errors:         allErrors,
@@ -832,6 +836,36 @@ func (e *conditionExtractor) EnterRexCommand(ctx *RexCommandContext) {
 		// Map each captured field to the source field
 		for _, captured := range captureGroups {
 			e.computedFields[strings.ToLower(captured)] = sourceField
+		}
+	}
+}
+
+// EnterRenameCommand tracks rename commands: | rename OldField AS NewField
+// Records field aliases so downstream consumers can resolve renamed fields.
+func (e *conditionExtractor) EnterRenameCommand(ctx *RenameCommandContext) {
+	e.commands = append(e.commands, "rename")
+
+	if e.inSubsearch > 0 {
+		return
+	}
+
+	for _, spec := range ctx.AllRenameSpec() {
+		fields := spec.AllFieldName()
+		// renameSpec: fieldName AS (fieldName | QUOTED_STRING)
+		if len(fields) >= 1 {
+			oldName := fields[0].GetText()
+			var newName string
+			if len(fields) >= 2 {
+				newName = fields[1].GetText()
+			} else if spec.QUOTED_STRING() != nil {
+				newName = strings.Trim(spec.QUOTED_STRING().GetText(), "\"'")
+			}
+			if newName != "" && oldName != "" {
+				e.fieldAliases[strings.ToLower(newName)] = oldName
+				// Also track as computed field so downstream conditions
+				// on the renamed field are marked as computed.
+				e.computedFields[strings.ToLower(newName)] = oldName
+			}
 		}
 	}
 }
