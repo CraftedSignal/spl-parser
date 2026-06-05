@@ -43,12 +43,13 @@ type queryEntry struct {
 }
 
 type runResult struct {
-	ID        int64       `json:"id"`
-	Query     string      `json:"query,omitempty"`
-	SigmaYAML string      `json:"sigma_yaml,omitempty"`
-	BackSPL   string      `json:"back_spl,omitempty"`
-	Entry     *queryEntry `json:"entry,omitempty"`
-	Failure   *failure    `json:"failure,omitempty"`
+	ID           int64         `json:"id"`
+	Query        string        `json:"query,omitempty"`
+	SigmaYAML    string        `json:"sigma_yaml,omitempty"`
+	BackSPL      string        `json:"back_spl,omitempty"`
+	Entry        *queryEntry   `json:"entry,omitempty"`
+	Verification *verification `json:"verification,omitempty"`
+	Failure      *failure      `json:"failure,omitempty"`
 }
 
 type failure struct {
@@ -61,11 +62,25 @@ type failure struct {
 	Extra    []string `json:"extra,omitempty"`
 }
 
+type verification struct {
+	ExpectedConditions int `json:"expected_conditions"`
+	ParserConditions   int `json:"parser_conditions"`
+	SigmaConditions    int `json:"sigma_conditions"`
+	BackConditions     int `json:"back_conditions"`
+}
+
 type summary struct {
 	Total             int64         `json:"total"`
 	Passed            int64         `json:"passed"`
 	Failed            int64         `json:"failed"`
 	DuplicateQueries  int64         `json:"duplicate_queries"`
+	ParserOracleCheck int64         `json:"parser_oracle_checks"`
+	SigmaCheck        int64         `json:"sigma_checks"`
+	BackCheck         int64         `json:"back_conversion_checks"`
+	ExpectedConds     int64         `json:"expected_conditions_compared"`
+	ParserConds       int64         `json:"parser_conditions_compared"`
+	SigmaConds        int64         `json:"sigma_conditions_compared"`
+	BackConds         int64         `json:"back_conditions_compared"`
 	SPLParseErrors    int64         `json:"spl_parse_errors"`
 	ExpectedMismatch  int64         `json:"expected_mismatch"`
 	SigmaParseErrors  int64         `json:"sigma_parse_errors"`
@@ -289,6 +304,7 @@ func runGeneratedUnique(seed, target int64, workers, failLimit int, progress int
 			} else {
 				seen[hash] = struct{}{}
 				s.Passed++
+				recordVerification(result, &s)
 				if result.Entry != nil {
 					if err := cw.write(*result.Entry); err != nil {
 						closeJobs()
@@ -324,6 +340,7 @@ func acceptResult(result runResult, s *summary, failureRecords *int, failLimit i
 	s.Total++
 	if result.Failure == nil {
 		s.Passed++
+		recordVerification(result, s)
 		if result.Entry != nil {
 			if err := cw.write(*result.Entry); err != nil {
 				fatalf("write corpus: %v", err)
@@ -332,6 +349,19 @@ func acceptResult(result runResult, s *summary, failureRecords *int, failLimit i
 		return
 	}
 	recordFailure(result, s, failureRecords, failLimit, fw)
+}
+
+func recordVerification(result runResult, s *summary) {
+	if result.Verification == nil {
+		return
+	}
+	s.ParserOracleCheck++
+	s.SigmaCheck++
+	s.BackCheck++
+	s.ExpectedConds += int64(result.Verification.ExpectedConditions)
+	s.ParserConds += int64(result.Verification.ParserConditions)
+	s.SigmaConds += int64(result.Verification.SigmaConditions)
+	s.BackConds += int64(result.Verification.BackConditions)
 }
 
 func recordFailure(result runResult, s *summary, failureRecords *int, failLimit int, fw *failureWriter) {
@@ -446,6 +476,12 @@ func processCase(tc generatedCase) runResult {
 		Source: "generated_spl_sigma_roundtrip",
 		Name:   fmt.Sprintf("generated_%09d", tc.ID),
 		Query:  tc.Query,
+	}
+	result.Verification = &verification{
+		ExpectedConditions: len(expected),
+		ParserConditions:   len(actualSPL),
+		SigmaConditions:    len(actualSigma),
+		BackConditions:     len(actualBack),
 	}
 	return result
 }
@@ -1512,6 +1548,8 @@ func printProgress(s summary, total int64, start time.Time) {
 
 func printSummary(s summary, corpusPath, failPath string, failureRecords int) {
 	fmt.Printf("generated=%d passed=%d failed=%d duplicates=%d duration=%s\n", s.Total, s.Passed, s.Failed, s.DuplicateQueries, s.Duration)
+	fmt.Printf("assertions: parser_oracle=%d sigma=%d back_conversion=%d\n", s.ParserOracleCheck, s.SigmaCheck, s.BackCheck)
+	fmt.Printf("conditions compared: expected=%d parser=%d sigma=%d back=%d\n", s.ExpectedConds, s.ParserConds, s.SigmaConds, s.BackConds)
 	fmt.Printf("failures: spl_parse=%d expected_mismatch=%d sigma_parse=%d sigma_mismatch=%d back_spl_parse=%d back_spl_mismatch=%d\n",
 		s.SPLParseErrors, s.ExpectedMismatch, s.SigmaParseErrors, s.SigmaMismatch, s.BackSPLParseError, s.BackSPLMismatch)
 	if corpusPath != "" {
