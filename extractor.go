@@ -1284,11 +1284,33 @@ func groupORConditions(conditions []Condition) []Condition {
 }
 
 func sameConditionGroup(a, b Condition) bool {
-	return strings.EqualFold(a.Field, b.Field) &&
-		a.Operator == b.Operator &&
-		a.Negated == b.Negated &&
-		a.IsComputed == b.IsComputed &&
-		strings.EqualFold(a.SourceField, b.SourceField)
+	if !strings.EqualFold(a.Field, b.Field) ||
+		!strings.EqualFold(a.Operator, b.Operator) ||
+		a.Negated != b.Negated ||
+		a.IsComputed != b.IsComputed ||
+		!strings.EqualFold(a.SourceField, b.SourceField) {
+		return false
+	}
+	if strings.EqualFold(a.Operator, "like") {
+		return likePatternKind(a.Value) == likePatternKind(b.Value)
+	}
+	return true
+}
+
+func likePatternKind(pattern string) string {
+	pattern = strings.ReplaceAll(pattern, "%", "*")
+	start := strings.HasPrefix(pattern, "*")
+	end := strings.HasSuffix(pattern, "*")
+	switch {
+	case start && end:
+		return "contains"
+	case start:
+		return "endswith"
+	case end:
+		return "startswith"
+	default:
+		return "matches"
+	}
 }
 
 func conditionAlternatives(cond Condition) []string {

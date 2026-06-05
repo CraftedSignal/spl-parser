@@ -131,7 +131,7 @@ var (
 func main() {
 	var (
 		total       = flag.Int64("n", 1_000_000, "number of generated SPL queries to test")
-		seed        = flag.Int64("seed", 1337, "base random seed")
+		seed        = flag.Int64("seed", 1337, "base random seed; use a negative value for crypto-random choices")
 		workers     = flag.Int("workers", runtime.NumCPU(), "parallel worker count")
 		corpusPath  = flag.String("corpus", "testdata/generated/spl_sigma_roundtrip_corpus.json", "verified generated corpus JSON array path; empty disables writing")
 		failPath    = flag.String("failures", "testdata/generated/spl_sigma_roundtrip_failures.jsonl", "failure JSONL path; empty disables writing")
@@ -370,13 +370,14 @@ func processCase(tc generatedCase) runResult {
 
 	expected := normalizeExpected(tc.Expected)
 	actualSPL := normalizeSPLConditions(flattenSPLConditions(splResult))
-	if missing := missingConditions(expected, actualSPL); len(missing) > 0 {
+	if missing, extra := compareConditionSets(expected, actualSPL); len(missing) > 0 || len(extra) > 0 {
 		result.Failure = &failure{
 			Stage:    "expected_mismatch",
-			Reason:   "SPL parser did not extract all generated expected conditions",
+			Reason:   "SPL parser extraction differed from generated semantic oracle",
 			Expected: conditionKeys(expected),
 			Actual:   conditionKeys(actualSPL),
 			Missing:  conditionKeys(missing),
+			Extra:    conditionKeys(extra),
 		}
 		return result
 	}
@@ -465,33 +466,7 @@ func processID(seed, id int64) (result runResult) {
 }
 
 func generateCase(seed, id int64) generatedCase {
-	rng := rand.New(rand.NewSource(seedForCase(seed, id)))
-	tc := generatedCase{ID: id, Seed: seed}
-
-	switch rng.Intn(10) {
-	case 0:
-		tc.Query, tc.Expected = generateSimpleSearch(rng)
-	case 1:
-		tc.Query, tc.Expected = generateBooleanSearch(rng)
-	case 2:
-		tc.Query, tc.Expected = generatePipelineSearch(rng)
-	case 3:
-		tc.Query, tc.Expected = generateSubsearchPipeline(rng)
-	case 4:
-		tc.Query, tc.Expected = generateTstatsSearch(rng)
-	case 5:
-		tc.Query, tc.Expected = generateLargeSearch(rng)
-	case 6:
-		tc.Query, tc.Expected = generateWindowsDetection(rng)
-	case 7:
-		tc.Query, tc.Expected = generateWhereFunctionSearch(rng)
-	case 8:
-		tc.Query, tc.Expected = generateFormattedSearch(rng)
-	default:
-		tc.Query, tc.Expected = generatePipelineSearch(rng)
-	}
-
-	return tc
+	return generateBoundedSemanticCase(seed, id)
 }
 
 func seedForCase(seed, id int64) int64 {

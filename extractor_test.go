@@ -247,6 +247,30 @@ func TestExtractConditions_ORGroupingPreservesINAlternativesAndNegation(t *testi
 	}
 }
 
+func TestExtractConditions_ORGroupingKeepsMixedLikePatternsSeparate(t *testing.T) {
+	query := `index=main | where like(QueryName, "%critical%") OR like(QueryName, "web01%")`
+
+	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Logf("Parse errors: %v", result.Errors)
+	}
+
+	var queryNameConditions []Condition
+	for _, cond := range result.Conditions {
+		if cond.Field == "QueryName" {
+			queryNameConditions = append(queryNameConditions, cond)
+		}
+	}
+	if len(queryNameConditions) != 2 {
+		t.Fatalf("Expected mixed LIKE patterns to stay separate, got %+v", queryNameConditions)
+	}
+	for _, cond := range queryNameConditions {
+		if len(cond.Alternatives) > 0 {
+			t.Fatalf("Mixed LIKE wildcard shapes must not be grouped: %+v", queryNameConditions)
+		}
+	}
+}
+
 func TestExtractConditions_DirectSubsearchesAreAvailable(t *testing.T) {
 	query := `index=main [search index=auth user="root" | append [search index=dns QueryName="bad.example"]]`
 

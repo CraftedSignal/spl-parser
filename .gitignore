@@ -28,6 +28,3 @@ Thumbs.db
 
 # Debug
 __debug_bin*
-
-# Generated stress-test corpora
-testdata/generated/
