@@ -19,20 +19,21 @@ type Condition struct {
 	Value        string   `json:"value"`
 	Negated      bool     `json:"negated"`
 	PipeStage    int      `json:"pipe_stage"`
-	LogicalOp    string   `json:"logical_op"`              // "AND" or "OR" connecting to previous condition
-	Alternatives []string `json:"alternatives,omitempty"`  // For OR conditions on same field
-	IsComputed   bool     `json:"is_computed,omitempty"`   // True if field was created by eval/rex
-	SourceField  string   `json:"source_field,omitempty"`  // Original field before transformation (for computed fields)
+	LogicalOp    string   `json:"logical_op"`             // "AND" or "OR" connecting to previous condition
+	Alternatives []string `json:"alternatives,omitempty"` // For OR conditions on same field
+	IsComputed   bool     `json:"is_computed,omitempty"`  // True if field was created by eval/rex
+	SourceField  string   `json:"source_field,omitempty"` // Original field before transformation (for computed fields)
 }
 
 // ParseResult contains all conditions extracted from the query
 type ParseResult struct {
 	Conditions     []Condition       `json:"conditions"`
-	GroupByFields  []string          `json:"group_by_fields,omitempty"`  // Fields from stats/eventstats/streamstats BY clauses
-	ComputedFields map[string]string `json:"computed_fields,omitempty"`  // Map of computed field name -> source field (from eval/rex)
+	GroupByFields  []string          `json:"group_by_fields,omitempty"` // Fields from stats/eventstats/streamstats BY clauses
+	ComputedFields map[string]string `json:"computed_fields,omitempty"` // Map of computed field name -> source field (from eval/rex)
 	FieldAliases   map[string]string `json:"field_aliases,omitempty"`   // Map of new name -> original name (from rename)
-	Commands       []string          `json:"commands,omitempty"`         // List of commands used in the query (stats, eventstats, etc.)
-	Joins          []JoinInfo        `json:"joins,omitempty"`            // Extracted join/append info
+	Commands       []string          `json:"commands,omitempty"`        // List of commands used in the query (stats, eventstats, etc.)
+	Joins          []JoinInfo        `json:"joins,omitempty"`           // Extracted join/append info
+	Subsearches    []*ParseResult    `json:"subsearches,omitempty"`     // Recursively parsed direct subsearches
 	Errors         []string          `json:"errors,omitempty"`
 }
 
@@ -41,20 +42,20 @@ type FieldProvenance string
 
 const (
 	ProvenanceMain      FieldProvenance = "main"      // Field exists in main query before join
-	ProvenanceJoined    FieldProvenance = "joined"     // Field comes from the joined subsearch
-	ProvenanceJoinKey   FieldProvenance = "join_key"   // Field is used as a join key (both sides)
-	ProvenanceAmbiguous FieldProvenance = "ambiguous"  // Cannot determine provenance
+	ProvenanceJoined    FieldProvenance = "joined"    // Field comes from the joined subsearch
+	ProvenanceJoinKey   FieldProvenance = "join_key"  // Field is used as a join key (both sides)
+	ProvenanceAmbiguous FieldProvenance = "ambiguous" // Cannot determine provenance
 )
 
 // JoinInfo captures the structured decomposition of a JOIN or APPEND command
 type JoinInfo struct {
-	Type           string            `json:"type"`                      // "inner", "left", "outer" (default: "inner")
-	JoinFields     []string          `json:"join_fields,omitempty"`     // Fields to join ON (from fieldList)
-	Options        map[string]string `json:"options,omitempty"`         // All joinOption key=value pairs
-	Subsearch      *ParseResult      `json:"subsearch"`                 // Recursively parsed subsearch
-	PipeStage      int               `json:"pipe_stage"`                // Pipeline stage where join appears
-	IsAppend       bool              `json:"is_append,omitempty"`       // True if this is an APPEND, not JOIN
-	ExposedFields  []string          `json:"exposed_fields,omitempty"`  // Fields the subsearch makes available
+	Type          string            `json:"type"`                     // "inner", "left", "outer" (default: "inner")
+	JoinFields    []string          `json:"join_fields,omitempty"`    // Fields to join ON (from fieldList)
+	Options       map[string]string `json:"options,omitempty"`        // All joinOption key=value pairs
+	Subsearch     *ParseResult      `json:"subsearch"`                // Recursively parsed subsearch
+	PipeStage     int               `json:"pipe_stage"`               // Pipeline stage where join appears
+	IsAppend      bool              `json:"is_append,omitempty"`      // True if this is an APPEND, not JOIN
+	ExposedFields []string          `json:"exposed_fields,omitempty"` // Fields the subsearch makes available
 }
 
 // SearchScopeMetadata are fields that define WHERE to search, not WHAT to match
@@ -110,6 +111,7 @@ type conditionExtractor struct {
 	fieldAliases    map[string]string // Rename mappings: new name -> original name
 	commands        []string          // Commands used in the query (stats, eventstats, etc.)
 	joins           []JoinInfo        // Extracted join info
+	subsearches     []*ParseResult    // Direct subsearch parse results
 	currentStage    int
 	inSubsearch     int // depth of subsearch nesting
 	inFunctionCall  int // depth of function call nesting (eval, count, etc.)
@@ -189,6 +191,7 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 		fieldAliases:   make(map[string]string), // rename mappings: new name -> original name
 		commands:       make([]string, 0),
 		joins:          make([]JoinInfo, 0),
+		subsearches:    make([]*ParseResult, 0),
 		lastLogicalOp:  "AND", // default
 		tokenStream:    stream,
 		originalQuery:  query,
@@ -209,6 +212,7 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 		FieldAliases:   extractor.fieldAliases,
 		Commands:       extractor.commands,
 		Joins:          extractor.joins,
+		Subsearches:    extractor.subsearches,
 		Errors:         allErrors,
 	}
 }
@@ -220,6 +224,12 @@ func (e *conditionExtractor) ExitPipelineStage(ctx *PipelineStageContext) {
 
 // EnterSubsearch tracks when we enter a subsearch
 func (e *conditionExtractor) EnterSubsearch(ctx *SubsearchContext) {
+	if e.inSubsearch == 0 {
+		subText := strings.TrimSpace(e.extractSubsearchText(ctx))
+		if subText != "" {
+			e.subsearches = append(e.subsearches, ExtractConditions(subText))
+		}
+	}
 	e.inSubsearch++
 }
 
@@ -1245,15 +1255,14 @@ func groupORConditions(conditions []Condition) []Condition {
 		cond := conditions[i]
 
 		// Look ahead for OR conditions on the same field
-		if i+1 < len(conditions) && conditions[i+1].LogicalOp == "OR" {
-			fieldLower := strings.ToLower(cond.Field)
-			alternatives := []string{cond.Value}
+		if i+1 < len(conditions) && conditions[i+1].LogicalOp == "OR" && sameConditionGroup(cond, conditions[i+1]) {
+			alternatives := conditionAlternatives(cond)
 
 			j := i + 1
 			for j < len(conditions) {
 				next := conditions[j]
-				if next.LogicalOp == "OR" && strings.ToLower(next.Field) == fieldLower && next.Operator == cond.Operator {
-					alternatives = append(alternatives, next.Value)
+				if next.LogicalOp == "OR" && sameConditionGroup(cond, next) {
+					alternatives = append(alternatives, conditionAlternatives(next)...)
 					j++
 				} else {
 					break
@@ -1261,7 +1270,7 @@ func groupORConditions(conditions []Condition) []Condition {
 			}
 
 			if len(alternatives) > 1 {
-				cond.Alternatives = alternatives
+				cond.Alternatives = deduplicateConditionValues(alternatives)
 				result = append(result, cond)
 				i = j - 1 // skip the grouped conditions
 				continue
@@ -1272,6 +1281,50 @@ func groupORConditions(conditions []Condition) []Condition {
 	}
 
 	return result
+}
+
+func sameConditionGroup(a, b Condition) bool {
+	return strings.EqualFold(a.Field, b.Field) &&
+		a.Operator == b.Operator &&
+		a.Negated == b.Negated &&
+		a.IsComputed == b.IsComputed &&
+		strings.EqualFold(a.SourceField, b.SourceField)
+}
+
+func conditionAlternatives(cond Condition) []string {
+	if len(cond.Alternatives) > 0 {
+		return append([]string(nil), cond.Alternatives...)
+	}
+	return []string{cond.Value}
+}
+
+func deduplicateConditionValues(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if !seen[value] {
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func conditionDedupKey(cond Condition) string {
+	return strings.ToLower(cond.Field) + "|" +
+		cond.Operator + "|" +
+		cond.Value + "|" +
+		boolKey(cond.Negated) + "|" +
+		boolKey(cond.IsComputed) + "|" +
+		strings.ToLower(cond.SourceField) + "|" +
+		strings.Join(cond.Alternatives, "\x00")
+}
+
+func boolKey(value bool) string {
+	if value {
+		return "1"
+	}
+	return "0"
 }
 
 // DeduplicateConditions removes duplicate conditions, keeping the latest pipe stage
@@ -1307,7 +1360,7 @@ func DeduplicateConditions(conditions []Condition) []Condition {
 		// Keep only conditions from max stage
 		for _, cond := range conds {
 			if cond.PipeStage == maxStage {
-				key := strings.ToLower(cond.Field) + "|" + cond.Operator + "|" + cond.Value
+				key := conditionDedupKey(cond)
 				if !seen[key] {
 					seen[key] = true
 					result = append(result, cond)

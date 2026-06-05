@@ -214,6 +214,73 @@ func TestExtractConditions_INOperator(t *testing.T) {
 	}
 }
 
+func TestExtractConditions_ORGroupingPreservesINAlternativesAndNegation(t *testing.T) {
+	query := `NOT (user.name IN ("SYSTEM", "admin", "root") OR user.name IN ("SYSTEM", "success"))`
+
+	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Logf("Parse errors: %v", result.Errors)
+	}
+
+	var userCond *Condition
+	for i := range result.Conditions {
+		if strings.EqualFold(result.Conditions[i].Field, "user.name") {
+			userCond = &result.Conditions[i]
+			break
+		}
+	}
+	if userCond == nil {
+		t.Fatalf("Expected user.name condition, got %v", conditionSummary(result.Conditions))
+	}
+	if !userCond.Negated {
+		t.Fatalf("Expected grouped user.name condition to stay negated: %+v", *userCond)
+	}
+
+	seen := make(map[string]bool)
+	for _, value := range userCond.Alternatives {
+		seen[value] = true
+	}
+	for _, expected := range []string{"SYSTEM", "admin", "root", "success"} {
+		if !seen[expected] {
+			t.Errorf("Expected alternative %q in %+v", expected, *userCond)
+		}
+	}
+}
+
+func TestExtractConditions_DirectSubsearchesAreAvailable(t *testing.T) {
+	query := `index=main [search index=auth user="root" | append [search index=dns QueryName="bad.example"]]`
+
+	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Logf("Parse errors: %v", result.Errors)
+	}
+
+	assertNoCondition(t, result.Conditions, "user")
+	assertNoCondition(t, result.Conditions, "QueryName")
+
+	if len(result.Subsearches) != 1 {
+		t.Fatalf("Expected 1 direct subsearch, got %d", len(result.Subsearches))
+	}
+
+	subsearchConditions := flattenTestConditions(result.Subsearches[0])
+	assertHasCondition(t, subsearchConditions, ExpectedCondition{Field: "user", Operator: "=", Value: "root"})
+	assertHasCondition(t, subsearchConditions, ExpectedCondition{Field: "QueryName", Operator: "=", Value: "bad.example"})
+}
+
+func flattenTestConditions(result *ParseResult) []Condition {
+	if result == nil {
+		return nil
+	}
+	conditions := append([]Condition(nil), result.Conditions...)
+	for _, subsearch := range result.Subsearches {
+		conditions = append(conditions, flattenTestConditions(subsearch)...)
+	}
+	for _, join := range result.Joins {
+		conditions = append(conditions, flattenTestConditions(join.Subsearch)...)
+	}
+	return conditions
+}
+
 func TestExtractConditions_PipedSearch(t *testing.T) {
 	// Test complex query from fuzz failures
 	// source is metadata, f_54401 and f_4400 are data fields
@@ -763,11 +830,11 @@ func TestExtractConditions_MetadataFiltering(t *testing.T) {
 
 func TestExtractConditions_FunctionConditions(t *testing.T) {
 	testCases := []struct {
-		name           string
-		query          string
-		expectedField  string
-		expectedOp     string
-		expectedValue  string
+		name          string
+		query         string
+		expectedField string
+		expectedOp    string
+		expectedValue string
 	}{
 		{
 			name:          "cidrmatch",
