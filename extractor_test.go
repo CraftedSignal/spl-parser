@@ -1669,6 +1669,9 @@ func TestExtractConditions_EmbeddedPowerQuerySemantics(t *testing.T) {
 	query := `| map search="| dataset account=xdr method=powerquery search=\"timestamp > $earliest_time$ event.category='ip' lower(src.process.name) in (\\\"cscript.exe\\\", \\\"wscript.exe\\\") !net_ipsubnet(dst.ip.address, \\\"10.0.0.0/8\\\") endpoint.name starts_with 'BE-'\" maxcount=100"`
 
 	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
 	if len(result.Conditions) == 0 {
 		t.Fatalf("Expected embedded powerquery conditions, got none; errors=%v", result.Errors)
 	}
@@ -1677,6 +1680,22 @@ func TestExtractConditions_EmbeddedPowerQuerySemantics(t *testing.T) {
 	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "src.process.name", Operator: "in", Value: "cscript.exe"})
 	assertHasConditionWithNegation(t, result.Conditions, ExpectedCondition{Field: "dst.ip.address", Operator: "cidrmatch", Value: "10.0.0.0/8"}, true)
 	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "endpoint.name", Operator: "starts_with", Value: "BE-"})
+}
+
+func TestExtractConditions_BracketedMapDatasetSearchOption(t *testing.T) {
+	query := `| makeresults | map [| dataset account=xdr method=powerquery maxcount=5000 search="| sql left join process_table = ( tgt.file.path matches '\\.py$' event.type != 'File Deletion' | columns event.category ), enum_table = ( src.process.name matches '^python' ) on agent.uuid"]`
+
+	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+	if len(result.Conditions) == 0 {
+		t.Fatalf("Expected bracketed dataset search conditions, got none")
+	}
+
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "tgt.file.path", Operator: "matches", Value: `\\.py$`})
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "event.type", Operator: "!=", Value: "File Deletion"})
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "src.process.name", Operator: "matches", Value: "^python"})
 }
 
 func TestExtractConditions_CommandResourcesWhenNoPredicates(t *testing.T) {

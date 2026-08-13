@@ -321,9 +321,14 @@ genericCommand
     ;
 
 genericArg
-    : IDENTIFIER (EQ MINUS? (value | IDENTIFIER))?
+    : genericOptionName (EQ MINUS? (value | genericOptionName))?
     | MINUS? value
     | LPAREN genericArg* RPAREN
+    ;
+
+genericOptionName
+    : IDENTIFIER
+    | SEARCH
     ;
 
 // Subsearch

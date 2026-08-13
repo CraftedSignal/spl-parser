@@ -462,8 +462,8 @@ func processInputEntry(id int64, entry inputQueryEntry) runResult {
 		result.Failure = &failure{Stage: "spl_parse", Reason: "ExtractConditions returned nil"}
 		return result
 	}
-	if errors := unexpectedSPLErrors(splResult.Errors); len(errors) > 0 {
-		result.Failure = &failure{Stage: "spl_parse", Reason: "SPL parser returned errors", Errors: errors}
+	if len(splResult.Errors) > 0 {
+		result.Failure = &failure{Stage: "spl_parse", Reason: "SPL parser returned errors", Errors: splResult.Errors}
 		return result
 	}
 
@@ -515,8 +515,8 @@ func processInputEntry(id int64, entry inputQueryEntry) runResult {
 		result.Failure = &failure{Stage: "back_spl_parse", Reason: "SPL parser returned nil for back-converted SPL"}
 		return result
 	}
-	if errors := unexpectedSPLErrors(backResult.Errors); len(errors) > 0 {
-		result.Failure = &failure{Stage: "back_spl_parse", Reason: "SPL parser returned errors for back-converted SPL", Errors: errors}
+	if len(backResult.Errors) > 0 {
+		result.Failure = &failure{Stage: "back_spl_parse", Reason: "SPL parser returned errors for back-converted SPL", Errors: backResult.Errors}
 		return result
 	}
 
@@ -539,19 +539,6 @@ func processInputEntry(id int64, entry inputQueryEntry) runResult {
 		BackConditions:   len(actualBack),
 	}
 	return result
-}
-
-func unexpectedSPLErrors(errors []string) []string {
-	var unexpected []string
-	for _, err := range errors {
-		switch err {
-		case "parser-native portable SPL predicate extraction emitted conditions":
-			continue
-		default:
-			unexpected = append(unexpected, err)
-		}
-	}
-	return unexpected
 }
 
 func processCase(tc generatedCase) runResult {

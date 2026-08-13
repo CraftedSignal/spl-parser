@@ -243,6 +243,10 @@ func (v *BaseSPLParserVisitor) VisitGenericArg(ctx *GenericArgContext) interface
 	return v.VisitChildren(ctx)
 }
 
+func (v *BaseSPLParserVisitor) VisitGenericOptionName(ctx *GenericOptionNameContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitSubsearch(ctx *SubsearchContext) interface{} {
 	return v.VisitChildren(ctx)
 }

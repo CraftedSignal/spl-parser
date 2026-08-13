@@ -184,6 +184,9 @@ type SPLParserListener interface {
 	// EnterGenericArg is called when entering the genericArg production.
 	EnterGenericArg(c *GenericArgContext)
 
+	// EnterGenericOptionName is called when entering the genericOptionName production.
+	EnterGenericOptionName(c *GenericOptionNameContext)
+
 	// EnterSubsearch is called when entering the subsearch production.
 	EnterSubsearch(c *SubsearchContext)
 
@@ -444,6 +447,9 @@ type SPLParserListener interface {
 
 	// ExitGenericArg is called when exiting the genericArg production.
 	ExitGenericArg(c *GenericArgContext)
+
+	// ExitGenericOptionName is called when exiting the genericOptionName production.
+	ExitGenericOptionName(c *GenericOptionNameContext)
 
 	// ExitSubsearch is called when exiting the subsearch production.
 	ExitSubsearch(c *SubsearchContext)

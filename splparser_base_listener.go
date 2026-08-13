@@ -374,6 +374,12 @@ func (s *BaseSPLParserListener) EnterGenericArg(ctx *GenericArgContext) {}
 // ExitGenericArg is called when production genericArg is exited.
 func (s *BaseSPLParserListener) ExitGenericArg(ctx *GenericArgContext) {}
 
+// EnterGenericOptionName is called when production genericOptionName is entered.
+func (s *BaseSPLParserListener) EnterGenericOptionName(ctx *GenericOptionNameContext) {}
+
+// ExitGenericOptionName is called when production genericOptionName is exited.
+func (s *BaseSPLParserListener) ExitGenericOptionName(ctx *GenericOptionNameContext) {}
+
 // EnterSubsearch is called when production subsearch is entered.
 func (s *BaseSPLParserListener) EnterSubsearch(ctx *SubsearchContext) {}
 

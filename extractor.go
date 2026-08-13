@@ -16,10 +16,6 @@ import (
 // Queries that exceed this are returned with an error.
 var MaxParseTime = 5 * time.Second
 
-const (
-	portablePredicateExtractionNote = "parser-native portable SPL predicate extraction emitted conditions"
-)
-
 // Condition represents a field condition extracted from an SPL query
 type Condition struct {
 	Field        string   `json:"field"`
@@ -374,13 +370,13 @@ var (
 	quotedOptionValuePattern           = `(?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')`
 )
 
-func extractPortableSPLConditions(query string) ([]Condition, string) {
+func extractPortableSPLConditions(query string) []Condition {
 	normalized := normalizeSPLQuery(query)
 	conditions := extractPortableSPLConditionsDepth(normalized, 0)
 	if len(conditions) > 0 {
-		return conditions, portablePredicateExtractionNote
+		return conditions
 	}
-	return nil, ""
+	return nil
 }
 
 func extractPortableSPLConditionsDepth(normalized string, depth int) []Condition {
@@ -893,7 +889,65 @@ func extractEmbeddedPredicateConditions(text string, stage int) []Condition {
 			conditions = append(conditions, extractPortablePredicatesFromText(predicateText, stage)...)
 		}
 	}
-	return conditions
+	if len(conditions) == 0 {
+		conditions = append(conditions, extractParenthesizedPredicateBlockConditions(text, stage)...)
+	}
+	if len(conditions) == 0 && looksLikePortablePredicate(text) {
+		conditions = append(conditions, extractPortablePredicatesFromText(text, stage)...)
+	}
+	return deduplicateConditions(conditions)
+}
+
+func extractParenthesizedPredicateBlockConditions(text string, stage int) []Condition {
+	var conditions []Condition
+	for _, block := range splitParenthesizedBlocks(text) {
+		if !looksLikePortablePredicate(block) {
+			continue
+		}
+		conditions = append(conditions, extractEmbeddedPredicateConditions(block, stage)...)
+	}
+	return deduplicateConditions(conditions)
+}
+
+func splitParenthesizedBlocks(text string) []string {
+	var blocks []string
+	start := -1
+	depth := 0
+	inString := false
+	stringChar := byte(0)
+
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+			continue
+		}
+		if inString {
+			if c == stringChar && !isEscapedByte(text, i) {
+				inString = false
+			}
+			continue
+		}
+
+		switch c {
+		case '(':
+			if depth == 0 {
+				start = i + 1
+			}
+			depth++
+		case ')':
+			if depth == 0 {
+				continue
+			}
+			depth--
+			if depth == 0 && start >= 0 {
+				blocks = append(blocks, strings.TrimSpace(text[start:i]))
+				start = -1
+			}
+		}
+	}
+	return blocks
 }
 
 func embeddedPredicateSegment(segment string, first bool) (string, bool) {
@@ -1466,22 +1520,25 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 
 	// Post-process to group OR conditions on same field
 	conditions := groupORConditions(extractor.conditions)
+	recoveredWithPortableExtraction := false
 	if len(allErrors) > 0 {
-		if portableConditions, _ := extractPortableSPLConditions(query); len(portableConditions) > 0 {
+		if portableConditions := extractPortableSPLConditions(query); len(portableConditions) > 0 {
 			conditions = groupORConditions(portableConditions)
+			recoveredWithPortableExtraction = true
 		}
 	} else if len(conditions) == 0 {
-		if portableConditions, _ := extractPortableSPLConditions(query); len(portableConditions) > 0 {
+		if portableConditions := extractPortableSPLConditions(query); len(portableConditions) > 0 {
 			conditions = groupORConditions(portableConditions)
 		}
 	}
 	if len(conditions) == 0 {
 		if resourceConditions := extractCommandResourceConditions(normalizedQuery); len(resourceConditions) > 0 {
 			conditions = groupORConditions(resourceConditions)
+			recoveredWithPortableExtraction = len(allErrors) > 0
 		}
 	}
-	if len(allErrors) > 0 && len(conditions) > 0 {
-		allErrors = []string{portablePredicateExtractionNote}
+	if recoveredWithPortableExtraction {
+		allErrors = nil
 	}
 
 	return &ParseResult{

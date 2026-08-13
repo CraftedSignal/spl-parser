@@ -184,6 +184,9 @@ type SPLParserVisitor interface {
 	// Visit a parse tree produced by SPLParser#genericArg.
 	VisitGenericArg(ctx *GenericArgContext) interface{}
 
+	// Visit a parse tree produced by SPLParser#genericOptionName.
+	VisitGenericOptionName(ctx *GenericOptionNameContext) interface{}
+
 	// Visit a parse tree produced by SPLParser#subsearch.
 	VisitSubsearch(ctx *SubsearchContext) interface{}
 
