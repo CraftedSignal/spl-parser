@@ -2,8 +2,12 @@ package spl
 
 import (
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/antlr4-go/antlr/v4"
 )
@@ -11,6 +15,10 @@ import (
 // MaxParseTime is the maximum time allowed for parsing a single query.
 // Queries that exceed this are returned with an error.
 var MaxParseTime = 5 * time.Second
+
+const (
+	portablePredicateExtractionNote = "parser-native portable SPL predicate extraction emitted conditions"
+)
 
 // Condition represents a field condition extracted from an SPL query
 type Condition struct {
@@ -116,6 +124,7 @@ type conditionExtractor struct {
 	inSubsearch     int // depth of subsearch nesting
 	inFunctionCall  int // depth of function call nesting (eval, count, etc.)
 	inStatsFunction int // depth of stats function nesting (count(), sum(), etc.)
+	inEvalCommand   int // depth of eval command expressions; assignments compute fields, they do not filter events
 	negated         bool
 	lastLogicalOp   string
 	errors          []string
@@ -131,6 +140,1258 @@ type errorListener struct {
 
 func (l *errorListener) SyntaxError(recognizer antlr.Recognizer, offendingSymbol interface{}, line, column int, msg string, e antlr.RecognitionException) {
 	l.errors = append(l.errors, msg)
+}
+
+func normalizeSPLQuery(query string) string {
+	normalized := query
+	normalized = normalizeSPLUnicodeWhitespace(normalized)
+	normalized = stripSPLLineContinuations(normalized)
+	normalized = stripSPLBacktickComments(normalized)
+	normalized = normalizeSPLDoubleEquals(normalized)
+	normalized = normalizeSPLBangFunctions(normalized)
+	return normalized
+}
+
+func stripSPLLineContinuations(query string) string {
+	var b strings.Builder
+	b.Grow(len(query))
+	inString := false
+	stringChar := byte(0)
+
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+			b.WriteByte(c)
+			continue
+		}
+		if inString {
+			b.WriteByte(c)
+			if c == stringChar && !isEscapedByte(query, i) {
+				inString = false
+			}
+			continue
+		}
+		if c == '\\' {
+			j := i + 1
+			for j < len(query) && (query[j] == ' ' || query[j] == '\t') {
+				j++
+			}
+			if j < len(query) && (query[j] == '\n' || query[j] == '\r') {
+				i = j - 1
+				continue
+			}
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+func stripSPLBacktickComments(query string) string {
+	var b strings.Builder
+	b.Grow(len(query))
+	inString := false
+	stringChar := byte(0)
+
+	for i := 0; i < len(query); {
+		c := query[i]
+		if !inString && strings.HasPrefix(query[i:], "```") {
+			end := strings.Index(query[i+3:], "```")
+			if end >= 0 {
+				i += 3 + end + 3
+			} else {
+				i += 3
+				for i < len(query) && query[i] != '\n' && query[i] != '\r' {
+					i++
+				}
+			}
+			b.WriteByte(' ')
+			continue
+		}
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		if inString {
+			b.WriteByte(c)
+			if c == stringChar && !isEscapedByte(query, i) {
+				inString = false
+			}
+			i++
+			continue
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return b.String()
+}
+
+func normalizeSPLDoubleEquals(query string) string {
+	var b strings.Builder
+	b.Grow(len(query))
+	inString := false
+	stringChar := byte(0)
+
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+			b.WriteByte(c)
+			continue
+		}
+		if inString {
+			b.WriteByte(c)
+			if c == stringChar && !isEscapedByte(query, i) {
+				inString = false
+			}
+			continue
+		}
+		if c == '=' && i+1 < len(query) && query[i+1] == '=' {
+			b.WriteByte('=')
+			i++
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+func normalizeSPLBangFunctions(query string) string {
+	replacements := []string{
+		"!isnull(", "NOT isnull(",
+		"!isnotnull(", "NOT isnotnull(",
+		"!match(", "NOT match(",
+		"!like(", "NOT like(",
+		"!cidrmatch(", "NOT cidrmatch(",
+	}
+	return replaceOutsideSPLStrings(query, replacements...)
+}
+
+func normalizeSPLUnicodeWhitespace(query string) string {
+	var b strings.Builder
+	b.Grow(len(query))
+	inString := false
+	stringChar := byte(0)
+
+	for i := 0; i < len(query); {
+		c := query[i]
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		if inString {
+			b.WriteByte(c)
+			if c == stringChar && !isEscapedByte(query, i) {
+				inString = false
+			}
+			i++
+			continue
+		}
+		if c < utf8.RuneSelf {
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(query[i:])
+		if r == utf8.RuneError && size == 1 {
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		switch {
+		case r == 0x200b || r == 0x200c || r == 0x200d || r == 0xfeff:
+		case unicode.IsSpace(r):
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+		i += size
+	}
+	return b.String()
+}
+
+func replaceOutsideSPLStrings(query string, replacements ...string) string {
+	replacer := strings.NewReplacer(replacements...)
+	var b strings.Builder
+	b.Grow(len(query))
+	inString := false
+	stringChar := byte(0)
+	tokenStart := 0
+
+	flushOutside := func(end int) {
+		if tokenStart < end {
+			b.WriteString(replacer.Replace(query[tokenStart:end]))
+		}
+	}
+
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+		if !inString && (c == '"' || c == '\'') {
+			flushOutside(i)
+			inString = true
+			stringChar = c
+			tokenStart = i
+			continue
+		}
+		if inString && c == stringChar && !isEscapedByte(query, i) {
+			b.WriteString(query[tokenStart : i+1])
+			inString = false
+			tokenStart = i + 1
+		}
+	}
+	if inString {
+		b.WriteString(query[tokenStart:])
+	} else {
+		flushOutside(len(query))
+	}
+	return b.String()
+}
+
+func isEscapedByte(s string, idx int) bool {
+	backslashes := 0
+	for i := idx - 1; i >= 0 && s[i] == '\\'; i-- {
+		backslashes++
+	}
+	return backslashes%2 == 1
+}
+
+var (
+	portableInConditionPattern         = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT|!)\s*)?((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s+IN(?::[A-Za-z]+)?\s*\(([^)]*)\)`)
+	portableFunctionInConditionPattern = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT|!)\s*)?(?:lower|upper)\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)\s+IN(?::[A-Za-z]+)?\s*\(([^)]*)\)`)
+	portableComparisonPattern          = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT|!)\s*)?((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*(contains|starts_with|matches|!=|>=|<=|=|>|<)\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:\([^)]*\))|(?:[^\s),\]]+))`)
+	portableFunctionComparisonPattern  = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT|!)\s*)?(?:lower|upper)\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)\s*(contains|starts_with|matches|!=|>=|<=|=|>|<)\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:\([^)]*\))|(?:[^\s),\]]+))`)
+	portableNetIPSubnetPattern         = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT|!)\s*)?net_ipsubnet\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*,\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:[^\s),\]]+))\s*\)`)
+	portableCidrMatchPattern           = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT|!)\s*)?cidrmatch\s*\(\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:[^\s),\]]+))\s*,\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)`)
+	portableNullFunctionPattern        = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT|!)\s*)?(isnotnull|isnull)\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)`)
+	quotedOptionValuePattern           = `(?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')`
+)
+
+func extractPortableSPLConditions(query string) ([]Condition, string) {
+	normalized := normalizeSPLQuery(query)
+	conditions := extractPortableSPLConditionsDepth(normalized, 0)
+	if len(conditions) > 0 {
+		return conditions, portablePredicateExtractionNote
+	}
+	return nil, ""
+}
+
+func extractPortableSPLConditionsDepth(normalized string, depth int) []Condition {
+	if depth > 6 {
+		return nil
+	}
+
+	var conditions []Condition
+	for stage, segment := range splitSPLPipelineSegments(normalized) {
+		text, ok := portablePredicateSegment(segment, stage == 0)
+		if !ok {
+			continue
+		}
+		conditions = append(conditions, extractPortablePredicatesFromText(text, stage)...)
+	}
+	conditions = append(conditions, extractLDAPSearchConditions(normalized)...)
+	conditions = append(conditions, extractDatasetPowerQueryConditions(normalized)...)
+	conditions = append(conditions, extractQuotedSearchOptionConditions(normalized, depth)...)
+	conditions = append(conditions, extractSubsearchConditions(normalized, depth)...)
+	return deduplicateConditions(conditions)
+}
+
+func splitSPLPipelineSegments(query string) []string {
+	var segments []string
+	start := 0
+	inString := false
+	stringChar := byte(0)
+	bracketDepth := 0
+	parenDepth := 0
+
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+			continue
+		}
+		if inString {
+			if c == stringChar && !isEscapedByte(query, i) {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '[':
+			bracketDepth++
+		case ']':
+			if bracketDepth > 0 {
+				bracketDepth--
+			}
+		case '(':
+			parenDepth++
+		case ')':
+			if parenDepth > 0 {
+				parenDepth--
+			}
+		case '|':
+			if bracketDepth == 0 && parenDepth == 0 {
+				segments = append(segments, query[start:i])
+				start = i + 1
+			}
+		}
+	}
+	segments = append(segments, query[start:])
+	return segments
+}
+
+func portablePredicateSegment(segment string, first bool) (string, bool) {
+	trimmed := strings.TrimSpace(segment)
+	lower := strings.ToLower(trimmed)
+	switch {
+	case trimmed == "":
+		return "", false
+	case first:
+		return trimmed, true
+	case strings.HasPrefix(lower, "search "):
+		return strings.TrimSpace(trimmed[len("search "):]), true
+	case strings.HasPrefix(lower, "where "):
+		return strings.TrimSpace(trimmed[len("where "):]), true
+	case strings.HasPrefix(lower, "tstats "):
+		if idx := strings.Index(strings.ToLower(trimmed), " where "); idx >= 0 {
+			return strings.TrimSpace(trimmed[idx+len(" where "):]), true
+		}
+	}
+	return "", false
+}
+
+func extractPortablePredicatesFromText(text string, stage int) []Condition {
+	text = stripBracketedSubsearches(text)
+	var matches []portableConditionMatch
+	seenSpans := make([][2]int, 0)
+	for _, match := range portableInConditionPattern.FindAllStringSubmatchIndex(text, -1) {
+		portableMatch := portableInMatch(text, match, stage)
+		matches = append(matches, portableMatch)
+		seenSpans = append(seenSpans, [2]int{portableMatch.start, portableMatch.end})
+	}
+	for _, match := range portableFunctionInConditionPattern.FindAllStringSubmatchIndex(text, -1) {
+		if spanOverlaps(match[0], match[1], seenSpans) {
+			continue
+		}
+		portableMatch := portableInMatch(text, match, stage)
+		matches = append(matches, portableMatch)
+		seenSpans = append(seenSpans, [2]int{portableMatch.start, portableMatch.end})
+	}
+	for _, match := range portableNetIPSubnetPattern.FindAllStringSubmatchIndex(text, -1) {
+		if spanOverlaps(match[0], match[1], seenSpans) {
+			continue
+		}
+		field := normalizePortableField(text[match[6]:match[7]])
+		if shouldSkipPortableField(field) {
+			continue
+		}
+		value := normalizePortableValue(text[match[8]:match[9]])
+		if value == "" {
+			continue
+		}
+		matches = append(matches, portableConditionMatch{
+			start: match[0],
+			end:   match[1],
+			cond: Condition{
+				Field:     field,
+				Operator:  "cidrmatch",
+				Value:     value,
+				Negated:   portableNegatedAt(text, match[0], match[4] >= 0),
+				PipeStage: stage,
+			},
+		})
+		seenSpans = append(seenSpans, [2]int{match[0], match[1]})
+	}
+	for _, match := range portableCidrMatchPattern.FindAllStringSubmatchIndex(text, -1) {
+		if spanOverlaps(match[0], match[1], seenSpans) {
+			continue
+		}
+		value := normalizePortableValue(text[match[6]:match[7]])
+		field := normalizePortableField(text[match[8]:match[9]])
+		if shouldSkipPortableField(field) || value == "" {
+			continue
+		}
+		matches = append(matches, portableConditionMatch{
+			start: match[0],
+			end:   match[1],
+			cond: Condition{
+				Field:     field,
+				Operator:  "cidrmatch",
+				Value:     value,
+				Negated:   portableNegatedAt(text, match[0], match[4] >= 0),
+				PipeStage: stage,
+			},
+		})
+		seenSpans = append(seenSpans, [2]int{match[0], match[1]})
+	}
+	for _, match := range portableNullFunctionPattern.FindAllStringSubmatchIndex(text, -1) {
+		if spanOverlaps(match[0], match[1], seenSpans) {
+			continue
+		}
+		field := normalizePortableField(text[match[8]:match[9]])
+		if shouldSkipPortableField(field) {
+			continue
+		}
+		matches = append(matches, portableConditionMatch{
+			start: match[0],
+			end:   match[1],
+			cond: Condition{
+				Field:     field,
+				Operator:  strings.ToLower(text[match[6]:match[7]]),
+				Negated:   portableNegatedAt(text, match[0], match[4] >= 0),
+				PipeStage: stage,
+			},
+		})
+		seenSpans = append(seenSpans, [2]int{match[0], match[1]})
+	}
+	for _, match := range portableComparisonPattern.FindAllStringSubmatchIndex(text, -1) {
+		if spanOverlaps(match[0], match[1], seenSpans) {
+			continue
+		}
+		portableMatch := portableComparisonMatch(text, match, stage)
+		matches = append(matches, portableMatch)
+		seenSpans = append(seenSpans, [2]int{portableMatch.start, portableMatch.end})
+	}
+	for _, match := range portableFunctionComparisonPattern.FindAllStringSubmatchIndex(text, -1) {
+		if spanOverlaps(match[0], match[1], seenSpans) {
+			continue
+		}
+		portableMatch := portableComparisonMatch(text, match, stage)
+		matches = append(matches, portableMatch)
+		seenSpans = append(seenSpans, [2]int{portableMatch.start, portableMatch.end})
+	}
+
+	sort.SliceStable(matches, func(i, j int) bool {
+		return matches[i].start < matches[j].start
+	})
+
+	conditions := make([]Condition, 0, len(matches))
+	for i, match := range matches {
+		if match.cond.Field == "" || (match.cond.Value == "" && match.cond.Operator != "isnotnull" && match.cond.Operator != "isnull") {
+			continue
+		}
+		if i == 0 {
+			match.cond.LogicalOp = "AND"
+		} else {
+			match.cond.LogicalOp = portableLogicalOpBefore(text, match.start)
+		}
+		conditions = append(conditions, match.cond)
+	}
+	return conditions
+}
+
+func stripBracketedSubsearches(text string) string {
+	out := []byte(text)
+	depth := 0
+	inString := false
+	stringChar := byte(0)
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if depth == 0 && !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+			continue
+		}
+		if depth == 0 && inString {
+			if c == stringChar && !isEscapedByte(text, i) {
+				inString = false
+			}
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch c {
+		case '[':
+			depth++
+			out[i] = ' '
+		case ']':
+			if depth > 0 {
+				depth--
+				out[i] = ' '
+			}
+		default:
+			if depth > 0 {
+				out[i] = ' '
+			}
+		}
+	}
+	return string(out)
+}
+
+func scanBalancedGroupEnd(text string, start int, open, close byte) int {
+	if start < 0 || start >= len(text) || text[start] != open {
+		return -1
+	}
+	depth := 0
+	inString := false
+	stringChar := byte(0)
+	for i := start; i < len(text); i++ {
+		c := text[i]
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+			continue
+		}
+		if inString {
+			if c == stringChar && !isEscapedByte(text, i) {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case open:
+			depth++
+		case close:
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return -1
+}
+
+type portableConditionMatch struct {
+	start int
+	end   int
+	cond  Condition
+}
+
+func portableInMatch(text string, match []int, stage int) portableConditionMatch {
+	field := normalizePortableField(text[match[6]:match[7]])
+	if shouldSkipPortableField(field) {
+		return portableConditionMatch{start: match[0], end: match[1]}
+	}
+	listEnd := match[9]
+	matchEnd := match[1]
+	if open := match[8] - 1; open >= 0 && text[open] == '(' {
+		if balancedEnd := scanBalancedGroupEnd(text, open, '(', ')'); balancedEnd > listEnd {
+			listEnd = balancedEnd - 1
+			matchEnd = balancedEnd
+		}
+	}
+	values := splitPortableValueList(text[match[8]:listEnd])
+	if len(values) == 0 {
+		return portableConditionMatch{start: match[0], end: match[1]}
+	}
+	return portableConditionMatch{
+		start: match[0],
+		end:   matchEnd,
+		cond: Condition{
+			Field:        field,
+			Operator:     "in",
+			Value:        values[0],
+			Alternatives: values,
+			Negated:      portableNegatedAt(text, match[0], match[4] >= 0),
+			PipeStage:    stage,
+		},
+	}
+}
+
+func portableComparisonMatch(text string, match []int, stage int) portableConditionMatch {
+	field := normalizePortableField(text[match[6]:match[7]])
+	if shouldSkipPortableField(field) {
+		return portableConditionMatch{start: match[0], end: match[1]}
+	}
+	op := strings.ToLower(text[match[8]:match[9]])
+	valueEnd := match[11]
+	matchEnd := match[1]
+	if match[10] >= 0 && match[10] < len(text) && text[match[10]] == '(' {
+		if balancedEnd := scanBalancedGroupEnd(text, match[10], '(', ')'); balancedEnd > valueEnd {
+			valueEnd = balancedEnd
+			matchEnd = balancedEnd
+		}
+	}
+	rawValue := strings.TrimSpace(text[match[10]:valueEnd])
+	values := []string{normalizePortableValue(rawValue)}
+	if strings.HasPrefix(rawValue, "(") && strings.HasSuffix(rawValue, ")") {
+		values = splitPortableValueList(strings.TrimSpace(rawValue[1 : len(rawValue)-1]))
+	}
+	if len(values) == 0 || values[0] == "" {
+		return portableConditionMatch{start: match[0], end: match[1]}
+	}
+	return portableConditionMatch{
+		start: match[0],
+		end:   matchEnd,
+		cond: Condition{
+			Field:        field,
+			Operator:     op,
+			Value:        values[0],
+			Alternatives: values,
+			Negated:      portableNegatedAt(text, match[0], match[4] >= 0),
+			PipeStage:    stage,
+		},
+	}
+}
+
+func spanOverlaps(start, end int, spans [][2]int) bool {
+	for _, span := range spans {
+		if start < span[1] && end > span[0] {
+			return true
+		}
+	}
+	return false
+}
+
+func portableLogicalOpBefore(text string, start int) string {
+	if start > len(text) {
+		start = len(text)
+	}
+	prefix := strings.TrimSpace(text[:start])
+	prefix = strings.TrimRight(prefix, "(")
+	prefix = strings.TrimSpace(prefix)
+	if strings.HasSuffix(strings.ToUpper(prefix), " OR") || strings.EqualFold(prefix, "OR") {
+		return "OR"
+	}
+	return "AND"
+}
+
+func portableNegatedAt(text string, start int, explicit bool) bool {
+	if start > len(text) {
+		start = len(text)
+	}
+	scanEnd := start
+	if scanEnd < len(text) && text[scanEnd] == '(' {
+		scanEnd++
+	}
+	currentNegated := false
+	pendingNegation := false
+	stack := make([]bool, 0)
+	inString := false
+	stringChar := byte(0)
+
+	for i := 0; i < scanEnd; i++ {
+		c := text[i]
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+			continue
+		}
+		if inString {
+			if c == stringChar && !isEscapedByte(text, i) {
+				inString = false
+			}
+			continue
+		}
+
+		if c == '!' && (i+1 >= len(text) || text[i+1] != '=') {
+			pendingNegation = true
+			continue
+		}
+		if hasWordAt(text, i, "NOT") {
+			pendingNegation = true
+			i += len("NOT") - 1
+			continue
+		}
+		switch c {
+		case '(':
+			groupNegated := currentNegated
+			if pendingNegation {
+				groupNegated = !groupNegated
+			}
+			stack = append(stack, groupNegated)
+			currentNegated = groupNegated
+			pendingNegation = false
+		case ')':
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+			if len(stack) > 0 {
+				currentNegated = stack[len(stack)-1]
+			} else {
+				currentNegated = false
+			}
+			pendingNegation = false
+		default:
+			if !unicode.IsSpace(rune(c)) {
+				pendingNegation = false
+			}
+		}
+	}
+
+	if explicit {
+		return !currentNegated
+	}
+	return currentNegated
+}
+
+func hasWordAt(text string, pos int, word string) bool {
+	if pos < 0 || pos+len(word) > len(text) {
+		return false
+	}
+	if !strings.EqualFold(text[pos:pos+len(word)], word) {
+		return false
+	}
+	if pos > 0 && isPortableWordByte(text[pos-1]) {
+		return false
+	}
+	if pos+len(word) < len(text) && isPortableWordByte(text[pos+len(word)]) {
+		return false
+	}
+	return true
+}
+
+func isPortableWordByte(c byte) bool {
+	return c == '_' || c == '.' || c == '-' ||
+		(c >= 'a' && c <= 'z') ||
+		(c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9')
+}
+
+func extractQuotedSearchOptionConditions(query string, depth int) []Condition {
+	var conditions []Condition
+	for _, literal := range extractQuotedOptionValues(query, "search") {
+		value := decodeSPLStringLiteral(literal)
+		trimmed := strings.TrimSpace(value)
+		if !looksLikeEmbeddedSearch(trimmed) {
+			continue
+		}
+		conditions = append(conditions, extractPortableSPLConditionsDepth(normalizeSPLQuery(trimmed), depth+1)...)
+	}
+	return conditions
+}
+
+func looksLikeEmbeddedSearch(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(lower, "|") ||
+		strings.HasPrefix(lower, "search ") ||
+		strings.HasPrefix(lower, "ldapsearch ") ||
+		strings.HasPrefix(lower, "dataset ") ||
+		strings.Contains(lower, "| dataset ") ||
+		strings.Contains(lower, " method=powerquery ")
+}
+
+func extractDatasetPowerQueryConditions(query string) []Condition {
+	var conditions []Condition
+	for stage, segment := range splitSPLPipelineSegments(query) {
+		lower := strings.ToLower(segment)
+		if !strings.Contains(lower, "dataset") || !strings.Contains(lower, "method=powerquery") {
+			continue
+		}
+		for _, literal := range extractQuotedOptionValues(segment, "search") {
+			value := normalizeEmbeddedPredicateText(decodeSPLStringLiteral(literal))
+			conditions = append(conditions, extractEmbeddedPredicateConditions(value, stage)...)
+		}
+	}
+	return conditions
+}
+
+func extractEmbeddedPredicateConditions(text string, stage int) []Condition {
+	var conditions []Condition
+	segments := splitSPLPipelineSegments(text)
+	for idx, segment := range segments {
+		if predicateText, ok := embeddedPredicateSegment(segment, idx == 0); ok {
+			conditions = append(conditions, extractPortablePredicatesFromText(predicateText, stage)...)
+		}
+	}
+	return conditions
+}
+
+func embeddedPredicateSegment(segment string, first bool) (string, bool) {
+	trimmed := strings.TrimSpace(strings.TrimRight(segment, ","))
+	if trimmed == "" {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	for _, prefix := range []string{"search ", "where ", "filter "} {
+		if strings.HasPrefix(lower, prefix) {
+			return strings.TrimSpace(trimmed[len(prefix):]), true
+		}
+	}
+	if strings.HasPrefix(lower, "union") {
+		rest := strings.TrimSpace(trimmed[len("union"):])
+		if rest != "" {
+			return rest, true
+		}
+	}
+	if strings.HasPrefix(lower, "and ") || strings.HasPrefix(lower, "or ") {
+		return trimmed, true
+	}
+	if strings.HasPrefix(trimmed, "(") || strings.HasPrefix(trimmed, "!") || strings.HasPrefix(lower, "not ") {
+		return trimmed, true
+	}
+	if first && looksLikePortablePredicate(trimmed) {
+		return trimmed, true
+	}
+	if looksLikePortablePredicate(trimmed) && !startsWithEmbeddedTransformCommand(lower) {
+		return trimmed, true
+	}
+	return "", false
+}
+
+func looksLikePortablePredicate(text string) bool {
+	return portableComparisonPattern.MatchString(text) ||
+		portableFunctionComparisonPattern.MatchString(text) ||
+		portableInConditionPattern.MatchString(text) ||
+		portableFunctionInConditionPattern.MatchString(text) ||
+		portableNetIPSubnetPattern.MatchString(text) ||
+		portableCidrMatchPattern.MatchString(text) ||
+		portableNullFunctionPattern.MatchString(text)
+}
+
+func startsWithEmbeddedTransformCommand(lower string) bool {
+	for _, prefix := range []string{
+		"columns ", "column ", "sort ", "group ", "let ", "sql ", "join ",
+		"left join ", "right join ", "inner join ", "outer join ", "on ",
+		"format ", "limit ", "dedup ", "return ",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeEmbeddedPredicateText(text string) string {
+	text = decodeEscapedQuotes(text)
+	text = strings.ReplaceAll(text, "\r\n", " ")
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = strings.ReplaceAll(text, "\t", " ")
+	return strings.Join(strings.Fields(text), " ")
+}
+
+func extractSubsearchConditions(query string, depth int) []Condition {
+	if depth > 6 {
+		return nil
+	}
+	var conditions []Condition
+	for _, subsearch := range splitBracketedSubsearches(query) {
+		conditions = append(conditions, extractPortableSPLConditionsDepth(normalizeSPLQuery(subsearch), depth+1)...)
+	}
+	return conditions
+}
+
+func splitBracketedSubsearches(query string) []string {
+	var subsearches []string
+	start := -1
+	depth := 0
+	inString := false
+	stringChar := byte(0)
+
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+			continue
+		}
+		if inString {
+			if c == stringChar && !isEscapedByte(query, i) {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '[':
+			if depth == 0 {
+				start = i + 1
+			}
+			depth++
+		case ']':
+			if depth == 0 {
+				continue
+			}
+			depth--
+			if depth == 0 && start >= 0 {
+				subsearches = append(subsearches, strings.TrimSpace(query[start:i]))
+				start = -1
+			}
+		}
+	}
+	return subsearches
+}
+
+func extractLDAPSearchConditions(query string) []Condition {
+	var conditions []Condition
+	for stage, segment := range splitSPLPipelineSegments(query) {
+		if !strings.Contains(strings.ToLower(segment), "ldapsearch") {
+			continue
+		}
+		for _, literal := range extractQuotedOptionValues(segment, "search") {
+			filter := strings.TrimSpace(decodeSPLStringLiteral(literal))
+			if !strings.HasPrefix(filter, "(") {
+				continue
+			}
+			conditions = append(conditions, parseLDAPFilterConditions(filter, stage)...)
+		}
+	}
+	return conditions
+}
+
+func extractQuotedOptionValues(text, optionName string) []string {
+	pattern := regexp.MustCompile(`(?is)\b` + regexp.QuoteMeta(optionName) + `\s*=\s*(` + quotedOptionValuePattern + `)`)
+	matches := pattern.FindAllStringSubmatchIndex(text, -1)
+	values := make([]string, 0, len(matches))
+	for _, match := range matches {
+		values = append(values, text[match[2]:match[3]])
+	}
+	return values
+}
+
+func decodeSPLStringLiteral(literal string) string {
+	literal = strings.TrimSpace(literal)
+	if len(literal) >= 2 {
+		first := literal[0]
+		last := literal[len(literal)-1]
+		if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+			literal = literal[1 : len(literal)-1]
+		}
+	}
+	return decodeEscapedQuotes(literal)
+}
+
+func decodeEscapedQuotes(value string) string {
+	for i := 0; i < 8; i++ {
+		next := strings.ReplaceAll(value, `\"`, `"`)
+		next = strings.ReplaceAll(next, `\'`, `'`)
+		if next == value {
+			return next
+		}
+		value = next
+	}
+	return value
+}
+
+func parseLDAPFilterConditions(filter string, stage int) []Condition {
+	parser := ldapFilterParser{text: filter, stage: stage}
+	return deduplicateConditions(parser.parse())
+}
+
+type ldapFilterParser struct {
+	text  string
+	pos   int
+	stage int
+}
+
+func (p *ldapFilterParser) parse() []Condition {
+	p.skipSpace()
+	conditions := p.parseFilter(false)
+	return conditions
+}
+
+func (p *ldapFilterParser) parseFilter(negated bool) []Condition {
+	p.skipSpace()
+	if !p.consume('(') {
+		return nil
+	}
+	p.skipSpace()
+	if p.done() {
+		return nil
+	}
+
+	switch p.peek() {
+	case '&', '|':
+		op := p.peek()
+		p.pos++
+		var conditions []Condition
+		first := true
+		for {
+			p.skipSpace()
+			if p.done() || p.peek() == ')' {
+				break
+			}
+			child := p.parseFilter(negated)
+			if len(child) == 0 {
+				break
+			}
+			if op == '|' && !first {
+				child[0].LogicalOp = "OR"
+			} else if child[0].LogicalOp == "" {
+				child[0].LogicalOp = "AND"
+			}
+			conditions = append(conditions, child...)
+			first = false
+		}
+		p.consume(')')
+		return conditions
+	case '!':
+		p.pos++
+		conditions := p.parseFilter(!negated)
+		p.consume(')')
+		return conditions
+	default:
+		bodyStart := p.pos
+		for !p.done() && p.peek() != ')' {
+			p.pos++
+		}
+		body := strings.TrimSpace(p.text[bodyStart:p.pos])
+		p.consume(')')
+		condition, ok := ldapAssertionCondition(body, negated, p.stage)
+		if !ok {
+			return nil
+		}
+		return []Condition{condition}
+	}
+}
+
+func (p *ldapFilterParser) skipSpace() {
+	for !p.done() && unicode.IsSpace(rune(p.peek())) {
+		p.pos++
+	}
+}
+
+func (p *ldapFilterParser) consume(ch byte) bool {
+	if p.done() || p.peek() != ch {
+		return false
+	}
+	p.pos++
+	return true
+}
+
+func (p *ldapFilterParser) peek() byte {
+	return p.text[p.pos]
+}
+
+func (p *ldapFilterParser) done() bool {
+	return p.pos >= len(p.text)
+}
+
+func ldapAssertionCondition(body string, negated bool, stage int) (Condition, bool) {
+	field, op, value, ok := splitLDAPAssertion(body)
+	if !ok {
+		return Condition{}, false
+	}
+	field = normalizePortableField(field)
+	value = normalizePortableValue(value)
+	if shouldSkipPortableField(field) || value == "" {
+		return Condition{}, false
+	}
+
+	switch op {
+	case "=":
+		if value == "*" {
+			op = "isnotnull"
+			value = ""
+		} else if strings.Contains(value, "*") {
+			op = "like"
+		}
+	case "~=":
+		op = "matches"
+	}
+
+	return Condition{
+		Field:     field,
+		Operator:  op,
+		Value:     value,
+		Negated:   negated,
+		PipeStage: stage,
+		LogicalOp: "AND",
+	}, true
+}
+
+func splitLDAPAssertion(body string) (field, op, value string, ok bool) {
+	for _, candidate := range []string{">=", "<=", "~=", "="} {
+		if idx := strings.Index(body, candidate); idx >= 0 {
+			return strings.TrimSpace(body[:idx]), candidate, strings.TrimSpace(body[idx+len(candidate):]), true
+		}
+	}
+	return "", "", "", false
+}
+
+func extractCommandResourceConditions(query string) []Condition {
+	var conditions []Condition
+	for stage, segment := range splitSPLPipelineSegments(query) {
+		trimmed := strings.TrimSpace(segment)
+		lower := strings.ToLower(trimmed)
+		switch {
+		case strings.HasPrefix(lower, "inputlookup "):
+			if value := firstCommandResourceArg(trimmed, "inputlookup"); value != "" {
+				conditions = append(conditions, resourceCondition("_spl.inputlookup", value, stage))
+			}
+		case strings.HasPrefix(lower, "outputlookup "):
+			if value := firstCommandResourceArg(trimmed, "outputlookup"); value != "" {
+				conditions = append(conditions, resourceCondition("_spl.outputlookup", value, stage))
+			}
+		case strings.HasPrefix(lower, "collect "):
+			if value := extractOptionValue(trimmed, "index"); value != "" {
+				conditions = append(conditions, resourceCondition("_spl.collect.index", value, stage))
+			}
+			if value := extractOptionValue(trimmed, "source"); value != "" {
+				conditions = append(conditions, resourceCondition("_spl.collect.source", value, stage))
+			}
+		case strings.HasPrefix(lower, "tstats "):
+			if value := extractTstatsDatamodelValue(trimmed); value != "" {
+				conditions = append(conditions, resourceCondition("_spl.datamodel", value, stage))
+			}
+		}
+	}
+	return deduplicateConditions(conditions)
+}
+
+func resourceCondition(field, value string, stage int) Condition {
+	return Condition{
+		Field:     field,
+		Operator:  "=",
+		Value:     normalizePortableValue(value),
+		PipeStage: stage,
+		LogicalOp: "AND",
+	}
+}
+
+func firstCommandResourceArg(segment, command string) string {
+	rest := strings.TrimSpace(segment[len(command):])
+	for _, arg := range splitSPLArgs(rest) {
+		if strings.Contains(arg, "=") {
+			continue
+		}
+		return normalizePortableValue(arg)
+	}
+	return ""
+}
+
+func splitSPLArgs(text string) []string {
+	var args []string
+	start := -1
+	inString := false
+	stringChar := byte(0)
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if start < 0 && !unicode.IsSpace(rune(c)) {
+			start = i
+		}
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+			continue
+		}
+		if inString {
+			if c == stringChar && !isEscapedByte(text, i) {
+				inString = false
+			}
+			continue
+		}
+		if unicode.IsSpace(rune(c)) && start >= 0 {
+			args = append(args, text[start:i])
+			start = -1
+		}
+	}
+	if start >= 0 {
+		args = append(args, text[start:])
+	}
+	return args
+}
+
+func extractOptionValue(text, optionName string) string {
+	pattern := regexp.MustCompile(`(?is)\b` + regexp.QuoteMeta(optionName) + `\s*=\s*(` + quotedOptionValuePattern + `|[^\s\]]+)`)
+	match := pattern.FindStringSubmatchIndex(text)
+	if match == nil {
+		return ""
+	}
+	return normalizePortableValue(text[match[2]:match[3]])
+}
+
+func extractTstatsDatamodelValue(segment string) string {
+	pattern := regexp.MustCompile(`(?is)\bfrom\s+datamodel(?:=|:)([A-Za-z0-9_.:-]+)`)
+	match := pattern.FindStringSubmatch(segment)
+	if len(match) < 2 {
+		return ""
+	}
+	return normalizePortableValue(match[1])
+}
+
+func splitPortableValueList(valuesText string) []string {
+	var values []string
+	start := 0
+	inString := false
+	stringChar := byte(0)
+	for i := 0; i < len(valuesText); i++ {
+		c := valuesText[i]
+		if !inString && (c == '"' || c == '\'') {
+			inString = true
+			stringChar = c
+			continue
+		}
+		if inString {
+			if c == stringChar && !isEscapedByte(valuesText, i) {
+				inString = false
+			}
+			continue
+		}
+		if c == ',' {
+			if value := normalizePortableValue(valuesText[start:i]); value != "" {
+				values = append(values, value)
+			}
+			start = i + 1
+		}
+	}
+	if value := normalizePortableValue(valuesText[start:]); value != "" {
+		values = append(values, value)
+	}
+	return values
+}
+
+func normalizePortableField(field string) string {
+	field = strings.TrimSpace(field)
+	field = trimMatchingQuotes(field)
+	return field
+}
+
+func normalizePortableValue(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimRight(value, ";")
+	value = trimMatchingQuotes(value)
+	value = decodeEscapedQuotes(value)
+	value = trimMatchingQuotes(value)
+	return value
+}
+
+func shouldSkipPortableField(field string) bool {
+	if field == "" {
+		return true
+	}
+	if strings.Contains(field, "<<") || strings.Contains(field, ">>") ||
+		strings.ContainsAny(field, "<> \t\r\n") ||
+		strings.HasPrefix(field, ".") || strings.HasSuffix(field, ".") {
+		return true
+	}
+	lower := strings.ToLower(field)
+	if isExcludedField(lower) {
+		return true
+	}
+	switch lower {
+	case "and", "or", "not", "true", "false", "null":
+		return true
+	}
+	return false
+}
+
+func trimMatchingQuotes(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) < 2 {
+		return value
+	}
+	first := value[0]
+	last := value[len(value)-1]
+	if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+		return value[1 : len(value)-1]
+	}
+	return value
+}
+
+func deduplicateConditions(conditions []Condition) []Condition {
+	seen := make(map[string]bool, len(conditions))
+	out := make([]Condition, 0, len(conditions))
+	for _, condition := range conditions {
+		key := strings.ToLower(condition.Field) + "\x00" +
+			strings.ToLower(condition.Operator) + "\x00" +
+			condition.Value + "\x00" +
+			fmt.Sprint(condition.Negated)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, condition)
+	}
+	return out
 }
 
 // ExtractConditions parses an SPL query and extracts all field conditions.
@@ -165,7 +1426,8 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 		}
 	}()
 
-	input := antlr.NewInputStream(query)
+	normalizedQuery := normalizeSPLQuery(query)
+	input := antlr.NewInputStream(normalizedQuery)
 	lexer := NewSPLLexer(input)
 
 	// Remove default error listener and add our own
@@ -194,7 +1456,7 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 		subsearches:    make([]*ParseResult, 0),
 		lastLogicalOp:  "AND", // default
 		tokenStream:    stream,
-		originalQuery:  query,
+		originalQuery:  normalizedQuery,
 	}
 	antlr.ParseTreeWalkerDefault.Walk(extractor, tree)
 
@@ -204,6 +1466,23 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 
 	// Post-process to group OR conditions on same field
 	conditions := groupORConditions(extractor.conditions)
+	if len(allErrors) > 0 {
+		if portableConditions, _ := extractPortableSPLConditions(query); len(portableConditions) > 0 {
+			conditions = groupORConditions(portableConditions)
+		}
+	} else if len(conditions) == 0 {
+		if portableConditions, _ := extractPortableSPLConditions(query); len(portableConditions) > 0 {
+			conditions = groupORConditions(portableConditions)
+		}
+	}
+	if len(conditions) == 0 {
+		if resourceConditions := extractCommandResourceConditions(normalizedQuery); len(resourceConditions) > 0 {
+			conditions = groupORConditions(resourceConditions)
+		}
+	}
+	if len(allErrors) > 0 && len(conditions) > 0 {
+		allErrors = []string{portablePredicateExtractionNote}
+	}
 
 	return &ParseResult{
 		Conditions:     conditions,
@@ -443,6 +1722,14 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 		e.inFunctionCall++
 		return
 	}
+	if e.inEvalCommand > 0 {
+		e.inFunctionCall++
+		return
+	}
+	if e.inStatsFunction > 0 {
+		e.inFunctionCall++
+		return
+	}
 
 	// Check for cidrmatch(cidr, field) - extracts a CIDR match condition
 	if ctx.CIDRMATCH() != nil {
@@ -503,7 +1790,6 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 				pattern := strings.Trim(allArgs[1].GetText(), "\"'")
 				// Convert SQL LIKE pattern to wildcard
 				pattern = strings.ReplaceAll(pattern, "%", "*")
-				pattern = strings.ReplaceAll(pattern, "_", "?")
 				cond := Condition{
 					Field:     field,
 					Operator:  "like",
@@ -786,6 +2072,14 @@ func (e *conditionExtractor) EnterSortCommand(ctx *SortCommandContext) {
 // EnterEvalCommand tracks eval commands
 func (e *conditionExtractor) EnterEvalCommand(ctx *EvalCommandContext) {
 	e.commands = append(e.commands, "eval")
+	e.inEvalCommand++
+}
+
+// ExitEvalCommand leaves eval command scope.
+func (e *conditionExtractor) ExitEvalCommand(ctx *EvalCommandContext) {
+	if e.inEvalCommand > 0 {
+		e.inEvalCommand--
+	}
 }
 
 // EnterWhereCommand tracks where commands
@@ -1069,7 +2363,7 @@ func (e *conditionExtractor) EnterBareWord(ctx *BareWordContext) {
 	if ctx.QUOTED_STRING() != nil {
 		value := ctx.QUOTED_STRING().GetText()
 		// Remove quotes
-		value = strings.Trim(value, "\"'")
+		value = trimMatchingQuotes(value)
 
 		// Create a keyword condition (field="_raw" or "_keyword")
 		cond := Condition{
@@ -1101,6 +2395,11 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 	// Skip conditions inside stats functions (like stats count(eval(field="x")))
 	// These are aggregation expressions, not filter conditions
 	if e.inStatsFunction > 0 {
+		return
+	}
+
+	// Eval assignments compute or transform fields; they are not predicates.
+	if e.inEvalCommand > 0 {
 		return
 	}
 
@@ -1224,7 +2523,7 @@ func extractValue(ctx IValueContext) string {
 
 	// Remove quotes if present
 	if ctx.QUOTED_STRING() != nil {
-		text = strings.Trim(text, "\"'")
+		text = trimMatchingQuotes(text)
 	}
 
 	return text

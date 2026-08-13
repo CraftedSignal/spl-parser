@@ -42,6 +42,13 @@ type queryEntry struct {
 	Query  string `json:"query"`
 }
 
+type inputQueryEntry struct {
+	Source string `json:"source"`
+	Name   string `json:"name"`
+	Title  string `json:"title"`
+	Query  string `json:"query"`
+}
+
 type runResult struct {
 	ID           int64         `json:"id"`
 	Query        string        `json:"query,omitempty"`
@@ -155,6 +162,7 @@ func main() {
 		strict      = flag.Bool("strict", false, "exit non-zero if any generated case fails")
 		stopOnFirst = flag.Bool("stop-on-first", false, "stop scheduling new work after first failure")
 		unique      = flag.Bool("unique", false, "write only unique query strings; keep generating until n unique verified queries are written")
+		inputCorpus = flag.String("input-corpus", "", "JSON array of real query entries to verify instead of generated cases")
 	)
 	flag.Parse()
 
@@ -178,6 +186,15 @@ func main() {
 	defer fw.close()
 
 	start := time.Now()
+	if *inputCorpus != "" {
+		s, failureRecords := runInputCorpus(*inputCorpus, *failLimit, cw, fw, start)
+		printInputSummary(s, *inputCorpus, *failPath, failureRecords)
+		if *strict && s.Failed > 0 {
+			os.Exit(1)
+		}
+		return
+	}
+
 	s, failureRecords := runGenerated(*seed, *total, *workers, *failLimit, *progress, *stopOnFirst, *unique, cw, fw, start)
 	printSummary(s, *corpusPath, *failPath, failureRecords)
 
@@ -336,6 +353,46 @@ func runGeneratedUnique(seed, target int64, workers, failLimit int, progress int
 	return s, failureRecords
 }
 
+func runInputCorpus(path string, failLimit int, cw *corpusWriter, fw *failureWriter, start time.Time) (summary, int) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fatalf("read input corpus: %v", err)
+	}
+	var entries []inputQueryEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		fatalf("parse input corpus: %v", err)
+	}
+
+	var s summary
+	var failureRecords int
+	for i, entry := range entries {
+		if strings.TrimSpace(entry.Query) == "" {
+			continue
+		}
+		s.Total++
+		result := processInputEntry(int64(i), entry)
+		if result.Failure == nil {
+			s.Passed++
+			if result.Verification != nil {
+				s.SigmaCheck++
+				s.BackCheck++
+				s.ParserConds += int64(result.Verification.ParserConditions)
+				s.SigmaConds += int64(result.Verification.SigmaConditions)
+				s.BackConds += int64(result.Verification.BackConditions)
+			}
+			if result.Entry != nil {
+				if err := cw.write(*result.Entry); err != nil {
+					fatalf("write corpus: %v", err)
+				}
+			}
+			continue
+		}
+		recordFailure(result, &s, &failureRecords, failLimit, fw)
+	}
+	s.Duration = time.Since(start)
+	return s, failureRecords
+}
+
 func acceptResult(result runResult, s *summary, failureRecords *int, failLimit int, cw *corpusWriter, fw *failureWriter) {
 	s.Total++
 	if result.Failure == nil {
@@ -383,6 +440,118 @@ func mapCapacityHint(target int64) int {
 		return 0
 	}
 	return int(target)
+}
+
+func processInputEntry(id int64, entry inputQueryEntry) runResult {
+	name := entry.Name
+	if name == "" {
+		name = entry.Title
+	}
+	result := runResult{
+		ID:    id,
+		Query: entry.Query,
+		Entry: &queryEntry{
+			Source: entry.Source,
+			Name:   name,
+			Query:  entry.Query,
+		},
+	}
+
+	splResult := spl.ExtractConditions(entry.Query)
+	if splResult == nil {
+		result.Failure = &failure{Stage: "spl_parse", Reason: "ExtractConditions returned nil"}
+		return result
+	}
+	if errors := unexpectedSPLErrors(splResult.Errors); len(errors) > 0 {
+		result.Failure = &failure{Stage: "spl_parse", Reason: "SPL parser returned errors", Errors: errors}
+		return result
+	}
+
+	actualSPL := normalizeSPLConditions(flattenSPLConditions(splResult))
+	if len(actualSPL) == 0 {
+		result.Failure = &failure{Stage: "spl_parse", Reason: "SPL parser extracted no conditions"}
+		return result
+	}
+
+	sigmaYAML, err := splResultToSigmaYAML(id, splResult)
+	if err != nil {
+		result.Failure = &failure{Stage: "sigma_build", Reason: err.Error()}
+		return result
+	}
+	result.SigmaYAML = sigmaYAML
+
+	sigmaResult := sigma.ExtractConditions(sigmaYAML)
+	if sigmaResult == nil {
+		result.Failure = &failure{Stage: "sigma_parse", Reason: "sigma ExtractConditions returned nil"}
+		return result
+	}
+	if len(sigmaResult.Errors) > 0 {
+		result.Failure = &failure{Stage: "sigma_parse", Reason: "Sigma parser returned errors", Errors: sigmaResult.Errors}
+		return result
+	}
+
+	actualSigma := normalizeSigmaConditions(sigmaResult.Conditions)
+	if missing, extra := compareConditionSets(actualSPL, actualSigma); len(missing) > 0 || len(extra) > 0 {
+		result.Failure = &failure{
+			Stage:    "sigma_mismatch",
+			Reason:   "SPL parse result and Sigma parser result differ",
+			Expected: conditionKeys(actualSPL),
+			Actual:   conditionKeys(actualSigma),
+			Missing:  conditionKeys(missing),
+			Extra:    conditionKeys(extra),
+		}
+		return result
+	}
+
+	backSPL, err := sigmaResultToSPL(sigmaResult)
+	if err != nil {
+		result.Failure = &failure{Stage: "back_spl_build", Reason: err.Error()}
+		return result
+	}
+	result.BackSPL = backSPL
+
+	backResult := spl.ExtractConditions(backSPL)
+	if backResult == nil {
+		result.Failure = &failure{Stage: "back_spl_parse", Reason: "SPL parser returned nil for back-converted SPL"}
+		return result
+	}
+	if errors := unexpectedSPLErrors(backResult.Errors); len(errors) > 0 {
+		result.Failure = &failure{Stage: "back_spl_parse", Reason: "SPL parser returned errors for back-converted SPL", Errors: errors}
+		return result
+	}
+
+	actualBack := normalizeSPLConditions(flattenSPLConditions(backResult))
+	if missing, extra := compareConditionSets(actualSigma, actualBack); len(missing) > 0 || len(extra) > 0 {
+		result.Failure = &failure{
+			Stage:    "back_spl_mismatch",
+			Reason:   "Sigma parser result and back-converted SPL parser result differ",
+			Expected: conditionKeys(actualSigma),
+			Actual:   conditionKeys(actualBack),
+			Missing:  conditionKeys(missing),
+			Extra:    conditionKeys(extra),
+		}
+		return result
+	}
+
+	result.Verification = &verification{
+		ParserConditions: len(actualSPL),
+		SigmaConditions:  len(actualSigma),
+		BackConditions:   len(actualBack),
+	}
+	return result
+}
+
+func unexpectedSPLErrors(errors []string) []string {
+	var unexpected []string
+	for _, err := range errors {
+		switch err {
+		case "parser-native portable SPL predicate extraction emitted conditions":
+			continue
+		default:
+			unexpected = append(unexpected, err)
+		}
+	}
+	return unexpected
 }
 
 func processCase(tc generatedCase) runResult {
@@ -987,6 +1156,9 @@ func splConditionToSigmaSelection(cond spl.Condition, name string) sigmaSelectio
 	op := strings.ToLower(cond.Operator)
 	negated := cond.Negated
 	values := conditionValues(cond.Value, cond.Alternatives)
+	if op == "starts_with" {
+		op = "startswith"
+	}
 
 	if field == "_raw" && op == "contains" {
 		if len(values) == 1 {
@@ -999,6 +1171,10 @@ func splConditionToSigmaSelection(cond spl.Condition, name string) sigmaSelectio
 	var value any = sigmaValue(values)
 	switch op {
 	case "=", "==":
+		if len(values) == 1 && first(values) == "*" {
+			key += "|exists"
+			value = true
+		}
 	case "in":
 		value = values
 	case "!=":
@@ -1082,7 +1258,7 @@ func sigmaConditionToSPL(cond sigma.Condition) string {
 	values := conditionValues(cond.Value, cond.Alternatives)
 	if cond.Field == "" || cond.Operator == "keyword" {
 		return joinAlternativeExpressions(values, func(v string) string {
-			return formatSPLValue(v)
+			return quoteSPLString(v)
 		})
 	}
 
@@ -1210,7 +1386,12 @@ func normalizeSigmaConditions(conditions []sigma.Condition) []normCondition {
 func normalizeParts(field, op, value string, negated bool) normCondition {
 	field = strings.ToLower(strings.TrimSpace(field))
 	op = strings.ToLower(strings.TrimSpace(op))
-	value = strings.Trim(value, "\"'")
+	value = strings.TrimSpace(value)
+	value = normalizeEscapedQuotes(value)
+	value = trimMatchingQuotes(value)
+	value = normalizeEscapedQuotes(value)
+	value = trimMatchingQuotes(value)
+	value = collapseTerminalEscapedBackslash(value)
 
 	switch op {
 	case "in", "==":
@@ -1231,6 +1412,8 @@ func normalizeParts(field, op, value string, negated bool) normCondition {
 		default:
 			op = "matches"
 		}
+	case "starts_with":
+		op = "startswith"
 	case "isnotnull":
 		op = "exists"
 		value = "true"
@@ -1246,6 +1429,11 @@ func normalizeParts(field, op, value string, negated bool) normCondition {
 		op = "contains"
 	}
 
+	if op == "=" && value == "*" {
+		op = "exists"
+		value = "true"
+	}
+
 	if op == "exists" && negated {
 		negated = false
 		if strings.EqualFold(value, "true") {
@@ -1256,6 +1444,38 @@ func normalizeParts(field, op, value string, negated bool) normCondition {
 	}
 
 	return normCondition{Field: field, Op: op, Value: value, Negated: negated}
+}
+
+func normalizeEscapedQuotes(value string) string {
+	for i := 0; i < 8; i++ {
+		next := strings.ReplaceAll(value, `\"`, `"`)
+		next = strings.ReplaceAll(next, `\'`, `'`)
+		if next == value {
+			return next
+		}
+		value = next
+	}
+	return value
+}
+
+func trimMatchingQuotes(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) < 2 {
+		return value
+	}
+	first := value[0]
+	last := value[len(value)-1]
+	if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+		return value[1 : len(value)-1]
+	}
+	return value
+}
+
+func collapseTerminalEscapedBackslash(value string) string {
+	for strings.HasSuffix(value, `\\`) {
+		value = strings.TrimSuffix(value, `\`)
+	}
+	return value
 }
 
 func conditionKeys(conditions []normCondition) []string {
@@ -1377,8 +1597,35 @@ func formatSPLValue(value string) string {
 	if numericValue.MatchString(value) {
 		return value
 	}
-	escaped := strings.ReplaceAll(value, `"`, `\"`)
-	return `"` + escaped + `"`
+	return quoteSPLString(value)
+}
+
+func quoteSPLString(value string) string {
+	if strings.Contains(value, `"`) && !strings.Contains(value, `'`) {
+		return "'" + value + "'"
+	}
+	var b strings.Builder
+	b.Grow(len(value) + 2)
+	b.WriteByte('"')
+	for i := 0; i < len(value); i++ {
+		if value[i] == '"' && !isEscaped(value, i) {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(value[i])
+	}
+	if len(value) > 0 && value[len(value)-1] == '\\' && !isEscaped(value, len(value)-1) {
+		b.WriteByte('\\')
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+func isEscaped(value string, idx int) bool {
+	backslashes := 0
+	for i := idx - 1; i >= 0 && value[i] == '\\'; i-- {
+		backslashes++
+	}
+	return backslashes%2 == 1
 }
 
 func spaceEquals(query, replacement string) string {
@@ -1555,6 +1802,17 @@ func printSummary(s summary, corpusPath, failPath string, failureRecords int) {
 	if corpusPath != "" {
 		fmt.Printf("verified corpus: %s\n", corpusPath)
 	}
+	if failPath != "" {
+		fmt.Printf("failure records: %s (%d written)\n", failPath, failureRecords)
+	}
+}
+
+func printInputSummary(s summary, inputPath, failPath string, failureRecords int) {
+	fmt.Printf("input=%s total=%d passed=%d failed=%d duration=%s\n", inputPath, s.Total, s.Passed, s.Failed, s.Duration)
+	fmt.Printf("assertions: sigma=%d back_conversion=%d\n", s.SigmaCheck, s.BackCheck)
+	fmt.Printf("conditions compared: parser=%d sigma=%d back=%d\n", s.ParserConds, s.SigmaConds, s.BackConds)
+	fmt.Printf("failures: spl_parse=%d sigma_parse=%d sigma_mismatch=%d back_spl_parse=%d back_spl_mismatch=%d\n",
+		s.SPLParseErrors, s.SigmaParseErrors, s.SigmaMismatch, s.BackSPLParseError, s.BackSPLMismatch)
 	if failPath != "" {
 		fmt.Printf("failure records: %s (%d written)\n", failPath, failureRecords)
 	}

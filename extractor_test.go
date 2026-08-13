@@ -1637,3 +1637,84 @@ func TestExtractConditions_NumericFieldName(t *testing.T) {
 		t.Error("Expected to find 'Image' condition")
 	}
 }
+
+func TestExtractConditions_NormalizesExportedSPLArtifacts(t *testing.T) {
+	query := "```\ncomment with symbols != )\n```\nindex=main \\\n status=200 | where totalcount==5 | search !isnull(user)"
+
+	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "status", Operator: "=", Value: "200"})
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "totalcount", Operator: "=", Value: "5"})
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "user", Operator: "isnull", Value: ""})
+}
+
+func TestExtractConditions_LDAPSearchFilterSemantics(t *testing.T) {
+	query := `| ldapsearch search="(&(objectClass=user)(!(objectClass=computer))(|(CN=*OPS*)(CN=ADM*)))"`
+
+	result := ExtractConditions(query)
+	if len(result.Conditions) == 0 {
+		t.Fatalf("Expected LDAP filter conditions, got none; errors=%v", result.Errors)
+	}
+
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "objectClass", Operator: "=", Value: "user"})
+	assertHasConditionWithNegation(t, result.Conditions, ExpectedCondition{Field: "objectClass", Operator: "=", Value: "computer"}, true)
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "CN", Operator: "like", Value: "*OPS*"})
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "CN", Operator: "like", Value: "ADM*"})
+}
+
+func TestExtractConditions_EmbeddedPowerQuerySemantics(t *testing.T) {
+	query := `| map search="| dataset account=xdr method=powerquery search=\"timestamp > $earliest_time$ event.category='ip' lower(src.process.name) in (\\\"cscript.exe\\\", \\\"wscript.exe\\\") !net_ipsubnet(dst.ip.address, \\\"10.0.0.0/8\\\") endpoint.name starts_with 'BE-'\" maxcount=100"`
+
+	result := ExtractConditions(query)
+	if len(result.Conditions) == 0 {
+		t.Fatalf("Expected embedded powerquery conditions, got none; errors=%v", result.Errors)
+	}
+
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "event.category", Operator: "=", Value: "ip"})
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "src.process.name", Operator: "in", Value: "cscript.exe"})
+	assertHasConditionWithNegation(t, result.Conditions, ExpectedCondition{Field: "dst.ip.address", Operator: "cidrmatch", Value: "10.0.0.0/8"}, true)
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "endpoint.name", Operator: "starts_with", Value: "BE-"})
+}
+
+func TestExtractConditions_CommandResourcesWhenNoPredicates(t *testing.T) {
+	query := `| inputlookup Inventory | outputlookup Inventory_out`
+
+	result := ExtractConditions(query)
+	if len(result.Conditions) == 0 {
+		t.Fatalf("Expected command resource conditions, got none; errors=%v", result.Errors)
+	}
+
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "_spl.inputlookup", Operator: "=", Value: "Inventory"})
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "_spl.outputlookup", Operator: "=", Value: "Inventory_out"})
+}
+
+func TestExtractConditions_DoesNotFallbackToWholeQueryKeyword(t *testing.T) {
+	query := `| makeresults | eval cct_detection_information=mvappend(cct_detection_information, "<<MATCHSTR>>: " . <<FIELD>> . " <br>")`
+
+	result := ExtractConditions(query)
+	for _, condition := range result.Conditions {
+		if condition.Field == "_raw" && condition.Operator == "contains" && strings.Contains(condition.Value, "makeresults") {
+			t.Fatalf("Unexpected lossy whole-query keyword fallback: %+v", condition)
+		}
+		if strings.Contains(condition.Field, "<<") || condition.Field == "cct_detection_information" {
+			t.Fatalf("Unexpected eval/template condition: %+v", condition)
+		}
+	}
+}
+
+func assertHasConditionWithNegation(t *testing.T, conditions []Condition, expected ExpectedCondition, negated bool) {
+	t.Helper()
+	for _, condition := range conditions {
+		if strings.EqualFold(condition.Field, expected.Field) &&
+			(expected.Operator == "" || condition.Operator == expected.Operator) &&
+			(expected.Value == "" || condition.Value == expected.Value) &&
+			condition.Negated == negated {
+			return
+		}
+	}
+	t.Fatalf("missing condition: field=%q op=%q value=%q negated=%t\n  in conditions: %v",
+		expected.Field, expected.Operator, expected.Value, negated, conditionSummary(conditions))
+}
