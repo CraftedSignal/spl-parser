@@ -2,7 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/craftedsignal/spl-parser.svg)](https://pkg.go.dev/github.com/craftedsignal/spl-parser)
 [![Go Report Card](https://goreportcard.com/badge/github.com/craftedsignal/spl-parser)](https://goreportcard.com/report/github.com/craftedsignal/spl-parser)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
 A production-ready Go parser for Splunk Processing Language (SPL), built with ANTLR4. This parser extracts conditions, fields, and search terms from SPL queries used in Splunk Enterprise, Splunk Cloud, and Splunk SOAR.
 
@@ -165,7 +165,7 @@ Contributions are welcome! Please ensure:
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+AGPL-3.0 - see [LICENSE](LICENSE) for details.
 
 ## Related Projects
 
