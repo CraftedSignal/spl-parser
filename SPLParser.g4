@@ -312,7 +312,7 @@ inputlookupCommand
     ;
 
 inputlookupOption
-    : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER)
+    : (IDENTIFIER | APPEND) EQ (QUOTED_STRING | fieldName | NUMBER)
     ;
 
 // Generic command for unrecognized commands

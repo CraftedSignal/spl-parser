@@ -81,6 +81,41 @@ func TestExtractConditions_ORConditions(t *testing.T) {
 	}
 }
 
+func TestExtractConditions_ORAcrossAndBranchesDoesNotMergeAlternatives(t *testing.T) {
+	query := `(process_name="*\\cmd.exe" AND process="*whoami*") OR (process="*hostname*" AND process_name="*\\powershell.exe")`
+	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Logf("Parse errors: %v", result.Errors)
+	}
+
+	var processValues []string
+	for _, c := range result.Conditions {
+		if c.Field == "process" {
+			if len(c.Alternatives) > 0 {
+				t.Fatalf("process values from separate OR branches must not be merged: %+v", c)
+			}
+			processValues = append(processValues, c.Value)
+		}
+	}
+
+	if len(processValues) != 2 {
+		t.Fatalf("expected two separate process conditions, got %v from %+v", processValues, result.Conditions)
+	}
+	foundWhoami := false
+	foundHostname := false
+	for _, value := range processValues {
+		if value == "*whoami*" {
+			foundWhoami = true
+		}
+		if value == "*hostname*" {
+			foundHostname = true
+		}
+	}
+	if !foundWhoami || !foundHostname {
+		t.Fatalf("expected whoami and hostname process values, got %v", processValues)
+	}
+}
+
 func TestExtractConditions_WhereClause(t *testing.T) {
 	// Both index and status should be extracted
 	query := `index=main | where status=200`
@@ -214,7 +249,7 @@ func TestExtractConditions_INOperator(t *testing.T) {
 	}
 }
 
-func TestExtractConditions_ORGroupingPreservesINAlternativesAndNegation(t *testing.T) {
+func TestExtractConditions_NegatedORGroupingPreservesINAlternativesSeparately(t *testing.T) {
 	query := `NOT (user.name IN ("SYSTEM", "admin", "root") OR user.name IN ("SYSTEM", "success"))`
 
 	result := ExtractConditions(query)
@@ -222,27 +257,37 @@ func TestExtractConditions_ORGroupingPreservesINAlternativesAndNegation(t *testi
 		t.Logf("Parse errors: %v", result.Errors)
 	}
 
-	var userCond *Condition
-	for i := range result.Conditions {
-		if strings.EqualFold(result.Conditions[i].Field, "user.name") {
-			userCond = &result.Conditions[i]
-			break
+	var userConds []Condition
+	for _, condition := range result.Conditions {
+		if strings.EqualFold(condition.Field, "user.name") {
+			userConds = append(userConds, condition)
 		}
 	}
-	if userCond == nil {
+	if len(userConds) != 2 {
 		t.Fatalf("Expected user.name condition, got %v", conditionSummary(result.Conditions))
 	}
-	if !userCond.Negated {
-		t.Fatalf("Expected grouped user.name condition to stay negated: %+v", *userCond)
+	for i, condition := range userConds {
+		if !condition.Negated {
+			t.Fatalf("Expected user.name condition %d stay negated: %+v", i, condition)
+		}
+		if len(condition.Alternatives) == 0 {
+			t.Fatalf("Expected user.name condition %d keep native IN alternatives: %+v", i, condition)
+		}
 	}
 
-	seen := make(map[string]bool)
-	for _, value := range userCond.Alternatives {
+	assertAlternativesContain(t, userConds[0].Alternatives, "SYSTEM", "admin", "root")
+	assertAlternativesContain(t, userConds[1].Alternatives, "SYSTEM", "success")
+}
+
+func assertAlternativesContain(t *testing.T, got []string, want ...string) {
+	t.Helper()
+	seen := make(map[string]bool, len(got))
+	for _, value := range got {
 		seen[value] = true
 	}
-	for _, expected := range []string{"SYSTEM", "admin", "root", "success"} {
+	for _, expected := range want {
 		if !seen[expected] {
-			t.Errorf("Expected alternative %q in %+v", expected, *userCond)
+			t.Fatalf("Expected alternative %q in %v", expected, got)
 		}
 	}
 }
@@ -1647,8 +1692,19 @@ func TestExtractConditions_NormalizesExportedSPLArtifacts(t *testing.T) {
 	}
 
 	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "status", Operator: "=", Value: "200"})
-	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "totalcount", Operator: "=", Value: "5"})
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "totalcount", Operator: "==", Value: "5"})
 	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "user", Operator: "isnull", Value: ""})
+}
+
+func TestExtractConditions_PreservesDoubleEqualsOperator(t *testing.T) {
+	result := ExtractConditions(`index=windows user=="SYSTEM"`)
+	if len(result.Conditions) < 2 {
+		t.Fatalf("expected index and user conditions, got %#v errors %v", result.Conditions, result.Errors)
+	}
+	user := result.Conditions[1]
+	if user.Field != "user" || user.Operator != "==" || user.Value != "SYSTEM" {
+		t.Fatalf("expected user == SYSTEM, got %#v", user)
+	}
 }
 
 func TestExtractConditions_LDAPSearchFilterSemantics(t *testing.T) {
@@ -1710,6 +1766,30 @@ func TestExtractConditions_CommandResourcesWhenNoPredicates(t *testing.T) {
 	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "_spl.outputlookup", Operator: "=", Value: "Inventory_out"})
 }
 
+func TestExtractConditions_CommandResourcesWithPredicates(t *testing.T) {
+	query := `index=main sourcetype=sysmon EventCode=1 | collect index=summary source="daily detections"`
+	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "EventCode", Operator: "=", Value: "1"})
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "_spl.collect.index", Operator: "=", Value: "summary"})
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "_spl.collect.source", Operator: "=", Value: "daily detections"})
+}
+
+func TestExtractConditions_CommandResourceQuotedArgsAndTstatsDatamodel(t *testing.T) {
+	query := `| inputlookup strict=t append=t "threat intel.csv" | outputlookup 'blocked ips.csv' | tstats count from datamodel=Endpoint.Processes by Processes.dest`
+	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "_spl.inputlookup", Operator: "=", Value: "threat intel.csv"})
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "_spl.outputlookup", Operator: "=", Value: "blocked ips.csv"})
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "_spl.datamodel", Operator: "=", Value: "Endpoint.Processes"})
+}
+
 func TestExtractConditions_DoesNotFallbackToWholeQueryKeyword(t *testing.T) {
 	query := `| makeresults | eval cct_detection_information=mvappend(cct_detection_information, "<<MATCHSTR>>: " . <<FIELD>> . " <br>")`
 
@@ -1722,6 +1802,43 @@ func TestExtractConditions_DoesNotFallbackToWholeQueryKeyword(t *testing.T) {
 			t.Fatalf("Unexpected eval/template condition: %+v", condition)
 		}
 	}
+}
+
+func TestExtractConditions_FieldReferenceWhereComparison(t *testing.T) {
+	result := ExtractConditions(`index=main | where process_name=parent_process_name`)
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	for _, condition := range result.Conditions {
+		if condition.Field == "process_name" {
+			if condition.ValueReference != "parent_process_name" {
+				t.Fatalf("expected field reference parent_process_name, got %+v", condition)
+			}
+			if condition.Value != "" {
+				t.Fatalf("expected no literal value for field reference, got %+v", condition)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected process_name condition, got %+v", result.Conditions)
+}
+
+func TestExtractConditions_BaseSearchUnquotedValueIsLiteral(t *testing.T) {
+	result := ExtractConditions(`index=main status=success`)
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+
+	for _, condition := range result.Conditions {
+		if condition.Field == "status" {
+			if condition.Value != "success" || condition.ValueReference != "" {
+				t.Fatalf("expected literal status value, got %+v", condition)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected status condition, got %+v", result.Conditions)
 }
 
 func assertHasConditionWithNegation(t *testing.T, conditions []Condition, expected ExpectedCondition, negated bool) {

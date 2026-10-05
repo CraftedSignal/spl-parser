@@ -18,27 +18,29 @@ var MaxParseTime = 5 * time.Second
 
 // Condition represents a field condition extracted from an SPL query
 type Condition struct {
-	Field        string   `json:"field"`
-	Operator     string   `json:"operator"`
-	Value        string   `json:"value"`
-	Negated      bool     `json:"negated"`
-	PipeStage    int      `json:"pipe_stage"`
-	LogicalOp    string   `json:"logical_op"`             // "AND" or "OR" connecting to previous condition
-	Alternatives []string `json:"alternatives,omitempty"` // For OR conditions on same field
-	IsComputed   bool     `json:"is_computed,omitempty"`  // True if field was created by eval/rex
-	SourceField  string   `json:"source_field,omitempty"` // Original field before transformation (for computed fields)
+	Field          string   `json:"field"`
+	Operator       string   `json:"operator"`
+	Value          string   `json:"value"`
+	ValueReference string   `json:"value_reference,omitempty"` // Field referenced by a where comparison
+	Negated        bool     `json:"negated"`
+	PipeStage      int      `json:"pipe_stage"`
+	LogicalOp      string   `json:"logical_op"`             // "AND" or "OR" connecting to previous condition
+	Alternatives   []string `json:"alternatives,omitempty"` // For OR conditions on same field
+	IsComputed     bool     `json:"is_computed,omitempty"`  // True if field was created by eval/rex
+	SourceField    string   `json:"source_field,omitempty"` // Original field before transformation (for computed fields)
 }
 
 // ParseResult contains all conditions extracted from the query
 type ParseResult struct {
-	Conditions     []Condition       `json:"conditions"`
-	GroupByFields  []string          `json:"group_by_fields,omitempty"` // Fields from stats/eventstats/streamstats BY clauses
-	ComputedFields map[string]string `json:"computed_fields,omitempty"` // Map of computed field name -> source field (from eval/rex)
-	FieldAliases   map[string]string `json:"field_aliases,omitempty"`   // Map of new name -> original name (from rename)
-	Commands       []string          `json:"commands,omitempty"`        // List of commands used in the query (stats, eventstats, etc.)
-	Joins          []JoinInfo        `json:"joins,omitempty"`           // Extracted join/append info
-	Subsearches    []*ParseResult    `json:"subsearches,omitempty"`     // Recursively parsed direct subsearches
-	Errors         []string          `json:"errors,omitempty"`
+	Conditions     []Condition          `json:"conditions"`
+	Expression     *ConditionExpression `json:"expression,omitempty"`
+	GroupByFields  []string             `json:"group_by_fields,omitempty"` // Fields from stats/eventstats/streamstats BY clauses
+	ComputedFields map[string]string    `json:"computed_fields,omitempty"` // Map of computed field name -> source field (from eval/rex)
+	FieldAliases   map[string]string    `json:"field_aliases,omitempty"`   // Map of new name -> original name (from rename)
+	Commands       []string             `json:"commands,omitempty"`        // List of commands used in the query (stats, eventstats, etc.)
+	Joins          []JoinInfo           `json:"joins,omitempty"`           // Extracted join/append info
+	Subsearches    []*ParseResult       `json:"subsearches,omitempty"`     // Recursively parsed direct subsearches
+	Errors         []string             `json:"errors,omitempty"`
 }
 
 // FieldProvenance indicates where a field originates relative to a join
@@ -121,6 +123,7 @@ type conditionExtractor struct {
 	inFunctionCall  int // depth of function call nesting (eval, count, etc.)
 	inStatsFunction int // depth of stats function nesting (count(), sum(), etc.)
 	inEvalCommand   int // depth of eval command expressions; assignments compute fields, they do not filter events
+	inWhereCommand  int // depth of where command predicates
 	negated         bool
 	lastLogicalOp   string
 	errors          []string
@@ -145,6 +148,7 @@ func normalizeSPLQuery(query string) string {
 	normalized = stripSPLBacktickComments(normalized)
 	normalized = normalizeSPLDoubleEquals(normalized)
 	normalized = normalizeSPLBangFunctions(normalized)
+	normalized = normalizeSPLInputlookupKeywordOptions(normalized)
 	return normalized
 }
 
@@ -268,6 +272,47 @@ func normalizeSPLBangFunctions(query string) string {
 	return replaceOutsideSPLStrings(query, replacements...)
 }
 
+var inputlookupAppendOptionPattern = regexp.MustCompile(`(?i)(\binputlookup\b(?:(?:\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^\s|]+)*)\s+)append(\s*=)`)
+
+func normalizeSPLInputlookupKeywordOptions(query string) string {
+	return replaceOutsideSPLStringsPattern(query, inputlookupAppendOptionPattern, `${1}append_option${2}`)
+}
+
+func replaceOutsideSPLStringsPattern(query string, pattern *regexp.Regexp, replacement string) string {
+	var b strings.Builder
+	b.Grow(len(query))
+	inString := false
+	stringChar := byte(0)
+	tokenStart := 0
+	flushOutside := func(end int) {
+		if tokenStart < end {
+			b.WriteString(pattern.ReplaceAllString(query[tokenStart:end], replacement))
+		}
+	}
+
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+		if !inString && (c == '"' || c == '\'') {
+			flushOutside(i)
+			inString = true
+			stringChar = c
+			tokenStart = i
+			continue
+		}
+		if inString && c == stringChar && !isEscapedByte(query, i) {
+			b.WriteString(query[tokenStart : i+1])
+			inString = false
+			tokenStart = i + 1
+		}
+	}
+	if inString {
+		b.WriteString(query[tokenStart:])
+	} else {
+		flushOutside(len(query))
+	}
+	return b.String()
+}
+
 func normalizeSPLUnicodeWhitespace(query string) string {
 	var b strings.Builder
 	b.Grow(len(query))
@@ -360,13 +405,13 @@ func isEscapedByte(s string, idx int) bool {
 }
 
 var (
-	portableInConditionPattern         = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT|!)\s*)?((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s+IN(?::[A-Za-z]+)?\s*\(([^)]*)\)`)
-	portableFunctionInConditionPattern = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT|!)\s*)?(?:lower|upper)\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)\s+IN(?::[A-Za-z]+)?\s*\(([^)]*)\)`)
-	portableComparisonPattern          = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT|!)\s*)?((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*(contains|starts_with|matches|!=|>=|<=|=|>|<)\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:\([^)]*\))|(?:[^\s),\]]+))`)
-	portableFunctionComparisonPattern  = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT|!)\s*)?(?:lower|upper)\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)\s*(contains|starts_with|matches|!=|>=|<=|=|>|<)\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:\([^)]*\))|(?:[^\s),\]]+))`)
-	portableNetIPSubnetPattern         = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT|!)\s*)?net_ipsubnet\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*,\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:[^\s),\]]+))\s*\)`)
-	portableCidrMatchPattern           = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT|!)\s*)?cidrmatch\s*\(\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:[^\s),\]]+))\s*,\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)`)
-	portableNullFunctionPattern        = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT|!)\s*)?(isnotnull|isnull)\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)`)
+	portableInConditionPattern         = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT\b|!)\s*)?((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s+IN(?::[A-Za-z]+)?\s*\(([^)]*)\)`)
+	portableFunctionInConditionPattern = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT\b|!)\s*)?(?:lower|upper)\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)\s+IN(?::[A-Za-z]+)?\s*\(([^)]*)\)`)
+	portableComparisonPattern          = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT\b|!)\s*)?((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*(contains|starts_with|matches|!=|>=|<=|==|=|>|<)\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:\([^)]*\))|(?:[^\s),\]]+))`)
+	portableFunctionComparisonPattern  = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT\b|!)\s*)?(?:lower|upper)\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)\s*(contains|starts_with|matches|!=|>=|<=|==|=|>|<)\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:\([^)]*\))|(?:[^\s),\]]+))`)
+	portableNetIPSubnetPattern         = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT\b|!)\s*)?net_ipsubnet\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*,\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:[^\s),\]]+))\s*\)`)
+	portableCidrMatchPattern           = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT\b|!)\s*)?cidrmatch\s*\(\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:[^\s),\]]+))\s*,\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)`)
+	portableNullFunctionPattern        = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT\b|!)\s*)?(isnotnull|isnull)\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)`)
 	quotedOptionValuePattern           = `(?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')`
 )
 
@@ -699,6 +744,9 @@ func portableComparisonMatch(text string, match []int, stage int) portableCondit
 		return portableConditionMatch{start: match[0], end: match[1]}
 	}
 	op := strings.ToLower(text[match[8]:match[9]])
+	if match[10] >= 0 && match[10] <= len(text) && strings.Contains(text[match[8]:match[10]], "==") {
+		op = "=="
+	}
 	valueEnd := match[11]
 	matchEnd := match[1]
 	if match[10] >= 0 && match[10] < len(text) && text[match[10]] == '(' {
@@ -1357,6 +1405,7 @@ func splitPortableValueList(valuesText string) []string {
 	start := 0
 	inString := false
 	stringChar := byte(0)
+	depth := 0
 	for i := 0; i < len(valuesText); i++ {
 		c := valuesText[i]
 		if !inString && (c == '"' || c == '\'') {
@@ -1370,7 +1419,17 @@ func splitPortableValueList(valuesText string) []string {
 			}
 			continue
 		}
-		if c == ',' {
+		switch c {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth != 0 {
+				continue
+			}
 			if value := normalizePortableValue(valuesText[start:i]); value != "" {
 				values = append(values, value)
 			}
@@ -1510,7 +1569,7 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 		subsearches:    make([]*ParseResult, 0),
 		lastLogicalOp:  "AND", // default
 		tokenStream:    stream,
-		originalQuery:  normalizedQuery,
+		originalQuery:  query,
 	}
 	antlr.ParseTreeWalkerDefault.Walk(extractor, tree)
 
@@ -1519,23 +1578,28 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 	allErrors = append(allErrors, extractor.errors...)
 
 	// Post-process to group OR conditions on same field
-	conditions := groupORConditions(extractor.conditions)
+	rawConditions := append([]Condition(nil), extractor.conditions...)
+	conditions, conditionIndexMap := groupORConditionsWithIndexMap(extractor.conditions)
+	expression := remapConditionExpression(buildConditionExpression(tree, rawConditions), conditionIndexMap)
 	recoveredWithPortableExtraction := false
 	if len(allErrors) > 0 {
 		if portableConditions := extractPortableSPLConditions(query); len(portableConditions) > 0 {
 			conditions = groupORConditions(portableConditions)
+			expression = nil
 			recoveredWithPortableExtraction = true
 		}
 	} else if len(conditions) == 0 {
 		if portableConditions := extractPortableSPLConditions(query); len(portableConditions) > 0 {
 			conditions = groupORConditions(portableConditions)
+			expression = nil
 		}
 	}
-	if len(conditions) == 0 {
-		if resourceConditions := extractCommandResourceConditions(normalizedQuery); len(resourceConditions) > 0 {
-			conditions = groupORConditions(resourceConditions)
+	if resourceConditions := extractCommandResourceConditions(normalizedQuery); len(resourceConditions) > 0 {
+		if len(conditions) == 0 {
+			expression = nil
 			recoveredWithPortableExtraction = len(allErrors) > 0
 		}
+		conditions = deduplicateConditions(append(conditions, resourceConditions...))
 	}
 	if recoveredWithPortableExtraction {
 		allErrors = nil
@@ -1543,6 +1607,7 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 
 	return &ParseResult{
 		Conditions:     conditions,
+		Expression:     expression,
 		GroupByFields:  extractor.groupByFields,
 		ComputedFields: extractor.computedFields,
 		FieldAliases:   extractor.fieldAliases,
@@ -2142,6 +2207,14 @@ func (e *conditionExtractor) ExitEvalCommand(ctx *EvalCommandContext) {
 // EnterWhereCommand tracks where commands
 func (e *conditionExtractor) EnterWhereCommand(ctx *WhereCommandContext) {
 	e.commands = append(e.commands, "where")
+	e.inWhereCommand++
+}
+
+// ExitWhereCommand leaves where command scope.
+func (e *conditionExtractor) ExitWhereCommand(ctx *WhereCommandContext) {
+	if e.inWhereCommand > 0 {
+		e.inWhereCommand--
+	}
 }
 
 // EnterTransactionCommand tracks transaction commands and marks computed fields.
@@ -2470,21 +2543,27 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 			return
 		}
 
-		op := ctx.ComparisonOp().GetText()
+		op := e.extractComparisonOperator(ctx)
 		value := extractValue(ctx.Value())
+		valueReference := ""
+		if e.inWhereCommand > 0 && splValueIsFieldReference(ctx.Value(), value) {
+			valueReference = value
+			value = ""
+		}
 
 		// Check if this is a computed field and get its source field
 		sourceField, isComputed := e.computedFields[fieldLower]
 
 		cond := Condition{
-			Field:       field,
-			Operator:    op,
-			Value:       value,
-			Negated:     e.negated,
-			PipeStage:   e.currentStage,
-			LogicalOp:   e.lastLogicalOp,
-			IsComputed:  isComputed,
-			SourceField: sourceField,
+			Field:          field,
+			Operator:       op,
+			Value:          value,
+			ValueReference: valueReference,
+			Negated:        e.negated,
+			PipeStage:      e.currentStage,
+			LogicalOp:      e.lastLogicalOp,
+			IsComputed:     isComputed,
+			SourceField:    sourceField,
 		}
 		e.conditions = append(e.conditions, cond)
 		e.lastLogicalOp = "AND" // reset to default
@@ -2523,6 +2602,45 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 		e.conditions = append(e.conditions, cond)
 		e.lastLogicalOp = "AND"
 	}
+}
+
+func (e *conditionExtractor) extractComparisonOperator(ctx *ConditionContext) string {
+	op := ctx.ComparisonOp().GetText()
+	if op != "=" || ctx.FieldName() == nil || ctx.Value() == nil || e.originalQuery == "" {
+		return op
+	}
+	if strings.Contains(e.originalQuery, ctx.FieldName().GetText()+"==") {
+		return "=="
+	}
+	fieldStart := ctx.FieldName().GetStart()
+	fieldStop := ctx.FieldName().GetStop()
+	valueStart := ctx.Value().GetStart()
+	valueStop := ctx.Value().GetStop()
+	if fieldStop == nil || valueStart == nil {
+		return op
+	}
+	if fieldStart != nil && valueStop != nil {
+		startPos := fieldStart.GetStart()
+		stopPos := valueStop.GetStop()
+		if startPos >= 0 && stopPos >= startPos && stopPos < len(e.originalQuery) {
+			if strings.Contains(e.originalQuery[startPos:stopPos+1], "==") {
+				return "=="
+			}
+		}
+	}
+	startPos := fieldStop.GetStop() + 1
+	valuePos := valueStart.GetStart()
+	if startPos < 0 || valuePos < startPos || valuePos >= len(e.originalQuery) {
+		return op
+	}
+	endPos := valuePos
+	if e.originalQuery[valuePos] == '=' {
+		endPos = valuePos + 1
+	}
+	if strings.Contains(e.originalQuery[startPos:endPos], "==") {
+		return "=="
+	}
+	return op
 }
 
 // EnterNotExpression tracks negation
@@ -2586,6 +2704,21 @@ func extractValue(ctx IValueContext) string {
 	return text
 }
 
+func splValueIsFieldReference(ctx IValueContext, value string) bool {
+	if ctx == nil || ctx.IDENTIFIER() == nil {
+		return false
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	switch strings.ToLower(value) {
+	case "true", "false", "null":
+		return false
+	}
+	return true
+}
+
 // extractValueList gets all values from a value list context
 func extractValueList(ctx IValueListContext) []string {
 	if ctx == nil {
@@ -2601,17 +2734,26 @@ func extractValueList(ctx IValueListContext) []string {
 
 // groupORConditions groups consecutive OR conditions on the same field
 func groupORConditions(conditions []Condition) []Condition {
+	grouped, _ := groupORConditionsWithIndexMap(conditions)
+	return grouped
+}
+
+func groupORConditionsWithIndexMap(conditions []Condition) ([]Condition, []int) {
 	if len(conditions) == 0 {
-		return conditions
+		return conditions, nil
 	}
 
 	result := make([]Condition, 0, len(conditions))
+	indexMap := make([]int, len(conditions))
+	for i := range indexMap {
+		indexMap[i] = -1
+	}
 
 	for i := 0; i < len(conditions); i++ {
 		cond := conditions[i]
 
 		// Look ahead for OR conditions on the same field
-		if i+1 < len(conditions) && conditions[i+1].LogicalOp == "OR" && sameConditionGroup(cond, conditions[i+1]) {
+		if i+1 < len(conditions) && conditions[i+1].LogicalOp == "OR" && sameConditionGroup(cond, conditions[i+1]) && canStartAlternativeGroup(conditions, i) {
 			alternatives := conditionAlternatives(cond)
 
 			j := i + 1
@@ -2627,22 +2769,41 @@ func groupORConditions(conditions []Condition) []Condition {
 
 			if len(alternatives) > 1 {
 				cond.Alternatives = deduplicateConditionValues(alternatives)
+				groupedIndex := len(result)
 				result = append(result, cond)
+				for rawIndex := i; rawIndex < j; rawIndex++ {
+					indexMap[rawIndex] = groupedIndex
+				}
 				i = j - 1 // skip the grouped conditions
 				continue
 			}
 		}
 
+		indexMap[i] = len(result)
 		result = append(result, cond)
 	}
 
-	return result
+	return result, indexMap
+}
+
+func canStartAlternativeGroup(conditions []Condition, index int) bool {
+	if index == 0 || strings.EqualFold(conditions[index].LogicalOp, "OR") {
+		return true
+	}
+	for i := 0; i < index; i++ {
+		if !IsSearchScopeMetadata(conditions[i].Field) {
+			return false
+		}
+	}
+	return true
 }
 
 func sameConditionGroup(a, b Condition) bool {
+	if a.Negated || b.Negated {
+		return false
+	}
 	if !strings.EqualFold(a.Field, b.Field) ||
 		!strings.EqualFold(a.Operator, b.Operator) ||
-		a.Negated != b.Negated ||
 		a.IsComputed != b.IsComputed ||
 		!strings.EqualFold(a.SourceField, b.SourceField) {
 		return false
@@ -2754,6 +2915,9 @@ func DeduplicateConditions(conditions []Condition) []Condition {
 // (stats, eventstats, streamstats, chart, timechart) that create computed fields
 // making static analysis unreliable
 func IsStatisticalQuery(result *ParseResult) bool {
+	if result == nil {
+		return false
+	}
 	statisticalCommands := map[string]bool{
 		"stats":       true,
 		"eventstats":  true,
@@ -2774,6 +2938,9 @@ func IsStatisticalQuery(result *ParseResult) bool {
 // HasUnmappedComputedFields checks if any computed field used in conditions
 // could not be traced back to a source field
 func HasUnmappedComputedFields(result *ParseResult) bool {
+	if result == nil {
+		return false
+	}
 	for _, cond := range result.Conditions {
 		if cond.IsComputed && cond.SourceField == "" {
 			return true
@@ -2785,6 +2952,9 @@ func HasUnmappedComputedFields(result *ParseResult) bool {
 // HasComplexWhereConditions checks if the query has where clauses with functions
 // that can't be validated statically (match, like, cidrmatch, etc.)
 func HasComplexWhereConditions(result *ParseResult) bool {
+	if result == nil {
+		return false
+	}
 	// Check if "where" command is used
 	hasWhere := false
 	for _, cmd := range result.Commands {
@@ -3023,6 +3193,9 @@ func classifyStage(stage IPipelineStageContext) string {
 // GetEventTypeFromConditions detects Windows Event types based on EventCode/EventID conditions
 // Returns event type strings like "windows_4688", "sysmon_1", etc.
 func GetEventTypeFromConditions(result *ParseResult) string {
+	if result == nil {
+		return ""
+	}
 	var eventCode string
 	var hasSysmon bool
 

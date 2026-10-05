@@ -12904,8 +12904,6 @@ func (p *SPLParser) InputlookupCommand() (localctx IInputlookupCommandContext) {
 	p.EnterRule(localctx, 110, SPLParserRULE_inputlookupCommand)
 	var _la int
 
-	var _alt int
-
 	p.EnterOuterAlt(localctx, 1)
 	{
 		p.SetState(744)
@@ -12915,31 +12913,19 @@ func (p *SPLParser) InputlookupCommand() (localctx IInputlookupCommandContext) {
 			goto errorExit
 		}
 	}
-	p.SetState(748)
-	p.GetErrorHandler().Sync(p)
-	if p.HasError() {
-		goto errorExit
-	}
-	_alt = p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 92, p.GetParserRuleContext())
-	if p.HasError() {
-		goto errorExit
-	}
-	for _alt != 2 && _alt != antlr.ATNInvalidAltNumber {
-		if _alt == 1 {
-			{
-				p.SetState(745)
-				p.InputlookupOption()
-			}
-
-		}
-		p.SetState(750)
+	for {
+		p.SetState(748)
 		p.GetErrorHandler().Sync(p)
 		if p.HasError() {
 			goto errorExit
 		}
-		_alt = p.GetInterpreter().AdaptivePredict(p.BaseParser, p.GetTokenStream(), 92, p.GetParserRuleContext())
-		if p.HasError() {
-			goto errorExit
+		_la = p.GetTokenStream().LA(1)
+		if !((_la == SPLParserAPPEND || _la == SPLParserIDENTIFIER) && p.GetTokenStream().LA(2) == SPLParserEQ) {
+			break
+		}
+		{
+			p.SetState(745)
+			p.InputlookupOption()
 		}
 	}
 	{
@@ -13104,13 +13090,17 @@ func (s *InputlookupOptionContext) Accept(visitor antlr.ParseTreeVisitor) interf
 func (p *SPLParser) InputlookupOption() (localctx IInputlookupOptionContext) {
 	localctx = NewInputlookupOptionContext(p, p.GetParserRuleContext(), p.GetState())
 	p.EnterRule(localctx, 112, SPLParserRULE_inputlookupOption)
+	var _la int
+
 	p.EnterOuterAlt(localctx, 1)
 	{
 		p.SetState(756)
-		p.Match(SPLParserIDENTIFIER)
-		if p.HasError() {
-			// Recognition error - abort rule
-			goto errorExit
+		_la = p.GetTokenStream().LA(1)
+		if !(_la == SPLParserAPPEND || _la == SPLParserIDENTIFIER) {
+			p.GetErrorHandler().RecoverInline(p)
+		} else {
+			p.GetErrorHandler().ReportMatch(p)
+			p.Consume()
 		}
 	}
 	{
