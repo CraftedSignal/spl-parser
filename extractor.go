@@ -35,12 +35,23 @@ type ParseResult struct {
 	Conditions     []Condition          `json:"conditions"`
 	Expression     *ConditionExpression `json:"expression,omitempty"`
 	GroupByFields  []string             `json:"group_by_fields,omitempty"` // Fields from stats/eventstats/streamstats BY clauses
+	Aggregations   []Aggregation        `json:"aggregations,omitempty"`    // Aggregations computed by stats-like commands, in query order
 	ComputedFields map[string]string    `json:"computed_fields,omitempty"` // Map of computed field name -> source field (from eval/rex)
 	FieldAliases   map[string]string    `json:"field_aliases,omitempty"`   // Map of new name -> original name (from rename)
 	Commands       []string             `json:"commands,omitempty"`        // List of commands used in the query (stats, eventstats, etc.)
 	Joins          []JoinInfo           `json:"joins,omitempty"`           // Extracted join/append info
 	Subsearches    []*ParseResult       `json:"subsearches,omitempty"`     // Recursively parsed direct subsearches
 	Errors         []string             `json:"errors,omitempty"`
+}
+
+// Aggregation is one stats-like aggregation and the column it outputs.
+// Conditions with a higher PipeStage filter the aggregated results.
+type Aggregation struct {
+	Command   string `json:"command"`         // stats, eventstats, streamstats, chart, timechart, tstats, mstats, top or rare
+	Function  string `json:"function"`        // Lower-case aggregation function, e.g. count, dc, sum
+	Field     string `json:"field,omitempty"` // Aggregated field when the argument is a plain field
+	Column    string `json:"column"`          // Output column: the alias, or Splunk's default name such as count or dc(src)
+	PipeStage int    `json:"pipe_stage"`      // Pipeline stage of the aggregating command
 }
 
 // FieldProvenance indicates where a field originates relative to a join
@@ -88,6 +99,12 @@ var splCommandKeywords = map[string]bool{
 	"span": true,
 }
 
+// statsColumnNames are the command keywords that name a stats output column
+// when the function has no alias.
+var statsColumnNames = map[string]bool{
+	"count": true, "sum": true, "avg": true, "min": true, "max": true,
+}
+
 // isExcludedField returns true if a field should be excluded from condition extraction
 // Note: This excludes time-range modifiers but NOT index/sourcetype/source which provide
 // useful context for rules. For test data generation filtering, use IsSearchScopeMetadata.
@@ -113,6 +130,7 @@ type conditionExtractor struct {
 	*BaseSPLParserListener
 	conditions      []Condition
 	groupByFields   []string          // Fields from stats BY clauses
+	aggregations    []Aggregation     // Aggregations computed by stats-like commands
 	computedFields  map[string]string // Fields created by eval commands: computed field -> source field
 	fieldAliases    map[string]string // Rename mappings: new name -> original name
 	commands        []string          // Commands used in the query (stats, eventstats, etc.)
@@ -1609,6 +1627,7 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 		Conditions:     conditions,
 		Expression:     expression,
 		GroupByFields:  extractor.groupByFields,
+		Aggregations:   extractor.aggregations,
 		ComputedFields: extractor.computedFields,
 		FieldAliases:   extractor.fieldAliases,
 		Commands:       extractor.commands,
@@ -2006,6 +2025,62 @@ func (e *conditionExtractor) ExitStatsFunction(ctx *StatsFunctionContext) {
 		}
 		e.computedFields[alias] = sourceField
 	}
+
+	if e.inSubsearch == 0 {
+		if aggregation, ok := newAggregation(ctx, e.currentStage); ok {
+			e.aggregations = append(e.aggregations, aggregation)
+		}
+	}
+}
+
+// newAggregation describes a stats-like function and the column it outputs.
+// Without an alias, Splunk names the column after the function as written,
+// e.g. count or dc(src).
+func newAggregation(ctx *StatsFunctionContext, stage int) (Aggregation, bool) {
+	aggregation := Aggregation{PipeStage: stage}
+	switch ctx.GetParent().(type) {
+	case *StatsCommandContext:
+		aggregation.Command = "stats"
+	case *EventstatsCommandContext:
+		aggregation.Command = "eventstats"
+	case *StreamstatsCommandContext:
+		aggregation.Command = "streamstats"
+	case *ChartCommandContext:
+		aggregation.Command = "chart"
+	case *TimechartCommandContext:
+		aggregation.Command = "timechart"
+	case *TstatsCommandContext:
+		aggregation.Command = "tstats"
+	case *MstatsCommandContext:
+		aggregation.Command = "mstats"
+	default:
+		return Aggregation{}, false
+	}
+	if ctx.IDENTIFIER() == nil {
+		return Aggregation{}, false
+	}
+	function := ctx.IDENTIFIER().GetText()
+	aggregation.Function = strings.ToLower(function)
+
+	column := function
+	if ctx.LPAREN() != nil {
+		argument := ""
+		if ctx.Expression() != nil {
+			argument = ctx.Expression().GetText()
+			if extractFirstFieldFromExpression(ctx.Expression()) == argument {
+				aggregation.Field = argument
+			}
+		}
+		column += "(" + argument + ")"
+	}
+	switch {
+	case ctx.FieldName() != nil:
+		column = ctx.FieldName().GetText()
+	case ctx.QUOTED_STRING() != nil:
+		column = strings.Trim(ctx.QUOTED_STRING().GetText(), `"'`)
+	}
+	aggregation.Column = column
+	return aggregation, true
 }
 
 // EnterTstatsCommand extracts group-by fields, datamodel reference, and commands from tstats
@@ -2169,12 +2244,25 @@ func (e *conditionExtractor) EnterTopCommand(ctx *TopCommandContext) {
 	for _, fieldList := range ctx.AllFieldList() {
 		e.extractByFields(fieldList)
 	}
+	e.addValueCountAggregations("top")
 }
 
 // EnterRareCommand extracts fields from rare commands
 func (e *conditionExtractor) EnterRareCommand(ctx *RareCommandContext) {
 	for _, fieldList := range ctx.AllFieldList() {
 		e.extractByFields(fieldList)
+	}
+	e.addValueCountAggregations("rare")
+}
+
+// addValueCountAggregations records the count and percent columns that top
+// and rare output for each value.
+func (e *conditionExtractor) addValueCountAggregations(command string) {
+	if e.inSubsearch > 0 {
+		return
+	}
+	for _, column := range []string{"count", "percent"} {
+		e.aggregations = append(e.aggregations, Aggregation{Command: command, Function: column, Column: column, PipeStage: e.currentStage})
 	}
 }
 
@@ -2538,8 +2626,10 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 		field := ctx.FieldName().GetText()
 		fieldLower := strings.ToLower(field)
 
-		// Skip SPL keywords (metadata fields like index, sourcetype, etc.)
-		if isExcludedField(fieldLower) {
+		// Skip SPL keywords (metadata fields like index, sourcetype, etc.).
+		// Stats function names stay: they are also the columns stats outputs
+		// (stats count → count), so "where count > 5" filters on a field.
+		if isExcludedField(fieldLower) && !statsColumnNames[fieldLower] {
 			return
 		}
 
