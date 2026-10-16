@@ -100,6 +100,10 @@ func collectSPLSearchExpressions(tree antlr.Tree) []ISearchExpressionContext {
 }
 
 func (b *splExpressionBuilder) searchExpression(ctx ISearchExpressionContext) *ConditionExpression {
+	if ctx == nil {
+		// tstats and mstats without a where clause
+		return nil
+	}
 	var expression *ConditionExpression
 	operator := BooleanAnd
 	for _, child := range ctx.GetChildren() {

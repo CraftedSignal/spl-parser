@@ -2,6 +2,7 @@ package spl
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -100,5 +101,14 @@ func TestExtractConditions_FilterOnStatsDefaultColumn(t *testing.T) {
 			}
 			t.Fatalf("filter on the count column was not extracted: %+v", result.Conditions)
 		})
+	}
+}
+
+func TestExtractConditions_TstatsWithoutWhereAfterConditions(t *testing.T) {
+	result := ExtractConditions("index=aws eventName=CreateAccessKey | tstats count from datamodel=Endpoint.Processes by Processes.dest")
+	for _, msg := range result.Errors {
+		if strings.Contains(msg, "panic") {
+			t.Fatalf("ExtractConditions panicked: %s", msg)
+		}
 	}
 }
