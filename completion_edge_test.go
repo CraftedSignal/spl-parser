@@ -19,7 +19,7 @@ func TestSPLCompletionDepthLDAPAndDedupEdges(t *testing.T) {
 		t.Fatalf("nil conditions deduped to %#v", deduped)
 	}
 
-	options := extractQuotedOptionValues(`ldapsearch search='(&(cn=Alice)(sn=\'O\'))' search="ignored"`, "search")
+	options := extractQuotedSearchValues(`ldapsearch search='(&(cn=Alice)(sn=\'O\'))' search="ignored"`)
 	if len(options) != 2 || decodeSPLStringLiteral(options[0]) != "(&(cn=Alice)(sn='O'))" {
 		t.Fatalf("quoted search options not preserved/decoded: %#v", options)
 	}
