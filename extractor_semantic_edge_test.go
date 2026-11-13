@@ -40,7 +40,7 @@ func TestPortablePredicateAdvancedExtractionEdges(t *testing.T) {
 }
 
 func TestPortablePredicateGuardEdges(t *testing.T) {
-	if got := scanBalancedGroupEnd("abc", 0, '(', ')'); got != -1 {
+	if got := scanBalancedParenthesesEnd("abc", 0); got != -1 {
 		t.Fatalf("non-group start returned %d", got)
 	}
 	if hasWordAt("annot", 2, "not") {

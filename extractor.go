@@ -686,7 +686,8 @@ func stripBracketedSubsearches(text string) string {
 	return string(out)
 }
 
-func scanBalancedGroupEnd(text string, start int, open, close byte) int {
+func scanBalancedParenthesesEnd(text string, start int) int {
+	const open, close byte = '(', ')'
 	if start < 0 || start >= len(text) || text[start] != open {
 		return -1
 	}
@@ -733,7 +734,7 @@ func portableInMatch(text string, match []int, stage int) portableConditionMatch
 	listEnd := match[9]
 	matchEnd := match[1]
 	if open := match[8] - 1; open >= 0 && text[open] == '(' {
-		if balancedEnd := scanBalancedGroupEnd(text, open, '(', ')'); balancedEnd > listEnd {
+		if balancedEnd := scanBalancedParenthesesEnd(text, open); balancedEnd > listEnd {
 			listEnd = balancedEnd - 1
 			matchEnd = balancedEnd
 		}
@@ -768,7 +769,7 @@ func portableComparisonMatch(text string, match []int, stage int) portableCondit
 	valueEnd := match[11]
 	matchEnd := match[1]
 	if match[10] >= 0 && match[10] < len(text) && text[match[10]] == '(' {
-		if balancedEnd := scanBalancedGroupEnd(text, match[10], '(', ')'); balancedEnd > valueEnd {
+		if balancedEnd := scanBalancedParenthesesEnd(text, match[10]); balancedEnd > valueEnd {
 			valueEnd = balancedEnd
 			matchEnd = balancedEnd
 		}
@@ -911,7 +912,7 @@ func isPortableWordByte(c byte) bool {
 
 func extractQuotedSearchOptionConditions(query string, depth int) []Condition {
 	var conditions []Condition
-	for _, literal := range extractQuotedOptionValues(query, "search") {
+	for _, literal := range extractQuotedSearchValues(query) {
 		value := decodeSPLStringLiteral(literal)
 		trimmed := strings.TrimSpace(value)
 		if !looksLikeEmbeddedSearch(trimmed) {
@@ -939,7 +940,7 @@ func extractDatasetPowerQueryConditions(query string) []Condition {
 		if !strings.Contains(lower, "dataset") || !strings.Contains(lower, "method=powerquery") {
 			continue
 		}
-		for _, literal := range extractQuotedOptionValues(segment, "search") {
+		for _, literal := range extractQuotedSearchValues(segment) {
 			value := normalizeEmbeddedPredicateText(decodeSPLStringLiteral(literal))
 			conditions = append(conditions, extractEmbeddedPredicateConditions(value, stage)...)
 		}
@@ -1136,7 +1137,7 @@ func extractLDAPSearchConditions(query string) []Condition {
 		if !strings.Contains(strings.ToLower(segment), "ldapsearch") {
 			continue
 		}
-		for _, literal := range extractQuotedOptionValues(segment, "search") {
+		for _, literal := range extractQuotedSearchValues(segment) {
 			filter := strings.TrimSpace(decodeSPLStringLiteral(literal))
 			if !strings.HasPrefix(filter, "(") {
 				continue
@@ -1147,8 +1148,8 @@ func extractLDAPSearchConditions(query string) []Condition {
 	return conditions
 }
 
-func extractQuotedOptionValues(text, optionName string) []string {
-	pattern := regexp.MustCompile(`(?is)\b` + regexp.QuoteMeta(optionName) + `\s*=\s*(` + quotedOptionValuePattern + `)`)
+func extractQuotedSearchValues(text string) []string {
+	pattern := regexp.MustCompile(`(?is)\bsearch\s*=\s*(` + quotedOptionValuePattern + `)`)
 	matches := pattern.FindAllStringSubmatchIndex(text, -1)
 	values := make([]string, 0, len(matches))
 	for _, match := range matches {
@@ -2771,12 +2772,7 @@ func (e *conditionExtractor) EnterLogicalOp(ctx *LogicalOpContext) {
 }
 
 // EnterOrExpression handles OR in where clauses
-func (e *conditionExtractor) EnterOrExpression(ctx *OrExpressionContext) {
-	// If there are multiple andExpressions, they're connected by OR
-	if len(ctx.AllAndExpression()) > 1 {
-		// Mark that the next conditions will be ORed
-	}
-}
+func (e *conditionExtractor) EnterOrExpression(_ *OrExpressionContext) {}
 
 // extractValue gets the string value from a value context
 func extractValue(ctx IValueContext) string {

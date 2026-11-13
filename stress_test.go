@@ -16,11 +16,11 @@ func TestParserStress(t *testing.T) {
 
 	const iterations = 100000
 	var (
-		total         int
-		panics        int
-		parseErrors   int
+		total          int
+		panics         int
+		parseErrors    int
 		withConditions int
-		panicQueries  []string
+		panicQueries   []string
 	)
 
 	for i := 0; i < iterations; i++ {

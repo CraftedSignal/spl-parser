@@ -255,19 +255,19 @@ var realWorldQueries = []struct {
 		name:  "splunk_mshta_spawn",
 		query: "| tstats count values(Processes.process_name) as process_name values(Processes.process) as process min(_time) as firstTime max(_time) as lastTime from datamodel=Endpoint.Processes where (Processes.parent_process_name=svchost.exe OR Processes.parent_process_name=wmiprvse.exe) by Processes.dest Processes.parent_process Processes.user",
 	},
-	// MITRE ATT&CK T1053 - Scheduled Task
+	// ATT&CK T1053 - Scheduled Task
 	{
-		name:  "mitre_scheduled_task",
+		name:  "attack_scheduled_task",
 		query: `index=windows sourcetype=WinEventLog:Security EventCode=4698 | rex field=Task_Content "(?<command><Command>.*</Command>)" | table _time ComputerName SubjectUserName TaskName command`,
 	},
-	// MITRE ATT&CK T1003 - Credential Dumping
+	// ATT&CK T1003 - Credential Dumping
 	{
-		name:  "mitre_credential_dump",
+		name:  "attack_credential_dump",
 		query: `index=sysmon EventCode=10 TargetImage="*\\lsass.exe" | stats count by SourceImage SourceUser Computer | where count > 1`,
 	},
-	// MITRE ATT&CK T1059 - Command and Scripting
+	// ATT&CK T1059 - Command and Scripting
 	{
-		name:  "mitre_command_scripting",
+		name:  "attack_command_scripting",
 		query: `index=windows EventCode=4688 (New_Process_Name="*\\cmd.exe" OR New_Process_Name="*\\powershell.exe" OR New_Process_Name="*\\wscript.exe" OR New_Process_Name="*\\cscript.exe") | stats count by Account_Name Creator_Process_Name New_Process_Name Process_Command_Line`,
 	},
 	// Advanced subsearch with append

@@ -34,7 +34,7 @@ func TestSPLPortableFunctionPredicateSkipEdges(t *testing.T) {
 	if len(conditions) != 0 {
 		t.Fatalf("invalid portable function predicates produced conditions: %#v", conditions)
 	}
-	if got := scanBalancedGroupEnd(`("unterminated`, 0, '(', ')'); got != -1 {
+	if got := scanBalancedParenthesesEnd(`("unterminated`, 0); got != -1 {
 		t.Fatalf("unterminated group end = %d", got)
 	}
 }
