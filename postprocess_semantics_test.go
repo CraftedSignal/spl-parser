@@ -3,6 +3,7 @@ package spl
 import (
 	"context"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -262,6 +263,73 @@ func TestUnsupportedSearchOperandBlocksAlternativeProjection(t *testing.T) {
 	if !got.ExpressionIncomplete || got.Expression != nil || len(got.Conditions) != 2 ||
 		len(got.Conditions[0].Alternatives) != 0 || len(got.Conditions[1].Alternatives) != 0 {
 		t.Fatalf("unsupported operand was crossed by grouping: %#v", got)
+	}
+}
+
+func TestUnsupportedWhereAtomKeepsExpressionIncomplete(t *testing.T) {
+	for _, tc := range []struct {
+		query  string
+		values []string
+	}{
+		{`| where x="u" OR (x="v" AND len(y)>2)`, []string{"u", "v"}},
+		{`| where (x="u" AND len(y)>2) OR x="v"`, []string{"u", "v"}},
+		{`| where x="u" AND len(y)>2`, []string{"u"}},
+		{`| where NOT (x="u" OR len(y)>2)`, []string{"u"}},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			got := ExtractConditions(tc.query)
+			if len(got.Errors) != 0 || !got.ExpressionIncomplete || got.Expression != nil || len(got.Warnings) == 0 ||
+				len(got.Conditions) != len(tc.values) {
+				t.Fatalf("incomplete where extraction = %#v", got)
+			}
+			for i, condition := range got.Conditions {
+				if condition.Field != "x" || condition.Value != tc.values[i] || len(condition.Alternatives) != 0 {
+					t.Fatalf("unsupported where atom merged or changed event predicates: %#v", got.Conditions)
+				}
+			}
+			semantic := AnalyzeQuery(tc.query)
+			if len(semantic.Errors) != 0 || semantic.Expression != nil || len(semantic.Warnings) == 0 ||
+				!reflect.DeepEqual(semantic.Conditions, got.Conditions) {
+				t.Fatalf("semantic incomplete where = %#v; extract %#v", semantic, got)
+			}
+		})
+	}
+	for _, query := range []string{`search *`, `search index=main | outputlookup results.csv`} {
+		got := ExtractConditions(query)
+		if len(got.Errors) != 0 || got.ExpressionIncomplete || len(got.Warnings) != 0 {
+			t.Fatalf("intentional nonpredicate marked incomplete: %#v", got)
+		}
+	}
+}
+
+func TestLargeProvenOrGroupsStayWithinNormalBudget(t *testing.T) {
+	for _, count := range []int{950, 1000} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			var query strings.Builder
+			query.WriteString("search ")
+			for i := range count {
+				if i > 0 {
+					query.WriteString(" OR ")
+				}
+				query.WriteString("x=v")
+				query.WriteString(strconv.Itoa(i))
+			}
+			got := ExtractConditions(query.String())
+			if len(got.Errors) != 0 || got.ExpressionIncomplete || len(got.Conditions) != 1 ||
+				len(got.Conditions[0].Alternatives) != count || !reflect.DeepEqual(got.Expression, leaf(0)) {
+				t.Fatalf("%d-term extraction: conditions=%d errors=%v incomplete=%v expression=%#v", count, len(got.Conditions), got.Errors, got.ExpressionIncomplete, got.Expression)
+			}
+			for i, value := range got.Conditions[0].Alternatives {
+				if value != "v"+strconv.Itoa(i) {
+					t.Fatalf("%d-term alternatives[%d] = %q", count, i, value)
+				}
+			}
+			semantic := AnalyzeQuery(query.String())
+			if len(semantic.Errors) != 0 || len(semantic.Conditions) != 1 || semantic.Expression == nil ||
+				semantic.Expression.Condition == nil || len(semantic.Expression.Condition.Alternatives) != count {
+				t.Fatalf("%d-term semantic: %#v", count, semantic)
+			}
+		})
 	}
 }
 

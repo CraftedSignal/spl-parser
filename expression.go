@@ -24,35 +24,54 @@ type ConditionExpression struct {
 }
 
 func buildConditionExpression(tree antlr.Tree, conditions []Condition, budget *parseBudget) *ConditionExpression {
-	if tree == nil || len(conditions) < 2 {
-		return nil
+	expression, _ := buildConditionExpressionWithCompleteness(tree, conditions, budget)
+	return expression
+}
+
+// A nil expression can be intentional for a single filter or a command with
+// no event predicate. incomplete distinguishes it from a dropped Boolean atom.
+func buildConditionExpressionWithCompleteness(tree antlr.Tree, conditions []Condition, budget *parseBudget) (*ConditionExpression, bool) {
+	if tree == nil {
+		return nil, false
 	}
-	if expression := buildPipelineConditionExpression(tree, conditions, budget); expression != nil {
-		return expression
+	if expression, incomplete := buildPipelineConditionExpressionWithCompleteness(tree, conditions, budget); incomplete {
+		return nil, true
+	} else if expression != nil && len(conditions) >= 2 {
+		return expression, false
+	}
+	if len(conditions) < 2 {
+		return nil, false
 	}
 	for _, candidate := range collectSPLSearchExpressions(tree, budget) {
 		builder := &splExpressionBuilder{conditions: conditions, budget: budget}
 		expression := builder.searchExpression(candidate)
+		if builder.incomplete {
+			return nil, true
+		}
 		if expression != nil && builder.next == len(conditions) {
-			return expression
+			return expression, false
 		}
 	}
-	return nil
+	return nil, false
 }
 
-func buildPipelineConditionExpression(tree antlr.Tree, conditions []Condition, budget *parseBudget) *ConditionExpression {
+func buildPipelineConditionExpressionWithCompleteness(tree antlr.Tree, conditions []Condition, budget *parseBudget) (*ConditionExpression, bool) {
 	builder := &splExpressionBuilder{conditions: conditions, budget: budget}
 	expression := builder.tree(tree)
-	if expression != nil && builder.next == len(conditions) {
-		return expression
+	if builder.incomplete {
+		return nil, true
 	}
-	return nil
+	if expression != nil && builder.next == len(conditions) {
+		return expression, false
+	}
+	return nil, false
 }
 
 type splExpressionBuilder struct {
 	budget     *parseBudget
 	conditions []Condition
 	next       int
+	incomplete bool
 }
 
 func (b *splExpressionBuilder) tree(node antlr.Tree) *ConditionExpression {
@@ -327,6 +346,7 @@ func (b *splExpressionBuilder) comparisonExpression(ctx IComparisonExpressionCon
 		return b.whereExpression(nested)
 	}
 	if !comparisonExpressionExtractsCondition(ctx) {
+		b.incomplete = true
 		return nil
 	}
 	return b.condition()

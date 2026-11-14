@@ -1733,10 +1733,13 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 		condition.Alternatives = cloneConditionAlternatives(condition.Alternatives, budget)
 		rawConditions = append(rawConditions, condition)
 	}
-	incomplete := hasUnsupportedSearchOperand(tree, budget)
+	unsupportedSearchOperand := hasUnsupportedSearchOperand(tree, budget)
+	incomplete := unsupportedSearchOperand
 	var rawExpression *ConditionExpression
 	if !incomplete {
-		rawExpression = buildConditionExpression(tree, rawConditions, budget)
+		var missingAtom bool
+		rawExpression, missingAtom = buildConditionExpressionWithCompleteness(tree, rawConditions, budget)
+		incomplete = missingAtom
 	}
 	conditions, conditionIndexMap := groupORConditionsByExpression(rawConditions, rawExpression, budget)
 	expression := remapConditionExpression(rawExpression, conditionIndexMap, budget)
@@ -1782,7 +1785,11 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	if incomplete {
 		expression = nil
 		budget.reserveOutput(1)
-		warnings = append(warnings, "boolean expression unavailable: search contains an unsupported macro or subsearch operand")
+		warning := "boolean expression unavailable: query contains an unsupported or unrepresented boolean operand"
+		if unsupportedSearchOperand {
+			warning = "boolean expression unavailable: search contains an unsupported macro or subsearch operand"
+		}
+		warnings = append(warnings, warning)
 	}
 	return &ParseResult{
 		ExpressionIncomplete: incomplete,
@@ -3027,24 +3034,50 @@ func groupORConditionsByExpression(conditions []Condition, expression *Condition
 	}
 	visit(expression)
 
+	// Accumulate each proven group once. Re-copying and de-duplicating the
+	// growing prefix for every sibling makes ordinary long OR lists quadratic.
+	type alternativesGroup struct {
+		values []string
+		seen   map[string]struct{}
+	}
+	groups := make(map[int]*alternativesGroup)
+	addValues := func(group *alternativesGroup, condition Condition) {
+		values := condition.Alternatives
+		if len(values) == 0 {
+			values = []string{condition.Value}
+		}
+		for _, value := range values {
+			budget.step()
+			if _, exists := group.seen[value]; exists {
+				continue
+			}
+			group.seen[value] = struct{}{}
+			group.values = append(group.values, value)
+		}
+	}
 	result := make([]Condition, 0, len(conditions))
 	indexMap := make([]int, len(conditions))
 	for i, condition := range conditions {
 		budget.step()
 		if start := groupStart[i]; start != i {
-			merged := &result[indexMap[start]]
-			alternatives := conditionAlternatives(*merged, budget)
-			for _, value := range conditionAlternatives(condition, budget) {
+			group := groups[start]
+			if group == nil {
 				budget.step()
-				alternatives = append(alternatives, value)
+				group = &alternativesGroup{seen: make(map[string]struct{})}
+				groups[start] = group
+				addValues(group, result[indexMap[start]])
 			}
-			merged.Alternatives = deduplicateConditionValues(alternatives, budget)
+			addValues(group, condition)
 			indexMap[i] = indexMap[start]
 			continue
 		}
 		indexMap[i] = len(result)
 		condition.Alternatives = cloneConditionAlternatives(condition.Alternatives, budget)
 		result = append(result, condition)
+	}
+	for start, group := range groups {
+		budget.step()
+		result[indexMap[start]].Alternatives = group.values
 	}
 	return result, indexMap
 }
@@ -3077,27 +3110,6 @@ func likePatternKind(pattern string) string {
 	default:
 		return "matches"
 	}
-}
-
-func conditionAlternatives(cond Condition, budget *parseBudget) []string {
-	if len(cond.Alternatives) > 0 {
-		return cloneConditionAlternatives(cond.Alternatives, budget)
-	}
-	budget.step()
-	return []string{cond.Value}
-}
-
-func deduplicateConditionValues(values []string, budget *parseBudget) []string {
-	seen := make(map[string]bool, len(values))
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		budget.step()
-		if !seen[value] {
-			seen[value] = true
-			result = append(result, value)
-		}
-	}
-	return result
 }
 
 func conditionDedupKey(cond Condition) string {
