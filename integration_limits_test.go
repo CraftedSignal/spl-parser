@@ -2,6 +2,7 @@ package spl
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -39,19 +40,20 @@ func TestConcurrentContextRequestsKeepBudgetsIndependent(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		t.Run(string(rune('a'+i)), func(t *testing.T) {
 			t.Parallel()
+			keyword := fmt.Sprintf("alpha%d*", i)
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			if failed := ExtractConditionsContext(ctx, `alpha* OR beta gamma`); len(failed.Errors) != 1 || len(failed.Conditions) != 0 {
 				t.Fatalf("canceled extraction returned partial output: %#v", failed)
 			}
-			semantic := AnalyzeQueryContext(context.Background(), "alpha* OR beta gamma `unknown`")
+			semantic := AnalyzeQueryContext(context.Background(), keyword+" OR beta gamma `unknown`")
 			if len(semantic.Errors) != 0 || len(semantic.Conditions) != 2 || semantic.Expression != nil || len(semantic.Warnings) != 1 {
 				t.Fatalf("independent semantic request lost search semantics: %#v", semantic)
 			}
-			if alternatives := semantic.Conditions[0].Alternatives; len(alternatives) != 2 || alternatives[0] != "alpha*" || alternatives[1] != "beta" || semantic.Conditions[1].Value != "gamma" {
+			if alternatives := semantic.Conditions[0].Alternatives; len(alternatives) != 2 || alternatives[0] != keyword || alternatives[1] != "beta" || semantic.Conditions[1].Value != "gamma" {
 				t.Fatalf("independent request lost keyword/glob grouping: %#v", semantic.Conditions)
 			}
-			if stages, err := ClassifyPipelineStagesContext(context.Background(), `alpha* OR beta gamma | stats count`); err != nil || len(stages) != 2 {
+			if stages, err := ClassifyPipelineStagesContext(context.Background(), keyword+` OR beta gamma | stats count`); err != nil || len(stages) != 2 {
 				t.Fatalf("independent classification failed: stages=%v, error=%v", stages, err)
 			}
 		})
