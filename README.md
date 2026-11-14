@@ -68,7 +68,8 @@ Found 4 conditions:
 
 For complete Boolean expressions, direct OR siblings on the same field may be
 stored as one condition with ordered `Alternatives`. When an operand cannot be
-represented (for example, `len(y)>2` in a `where` clause), extracted conditions
+represented (for example, `len(y)>2`, `false()`, or `isnull(y)=false` in a
+`where` clause), extracted conditions
 remain available, while `ExpressionIncomplete` is true and `Expression` is nil.
 `AnalyzeQuery` also leaves its expression nil in that case. Resource entries
 such as `_spl.outputlookup` are metadata and do not become expression leaves.

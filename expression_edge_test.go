@@ -86,22 +86,22 @@ func TestSPLExpressionBuilderHelperEdges(t *testing.T) {
 	if got := nestedWhereExpression(nil); got != nil {
 		t.Fatalf("nil nested expression returned %#v", got)
 	}
-	if comparisonExpressionExtractsCondition(nil) {
+	if comparisonExpressionExtractsCondition(nil, nil) {
 		t.Fatalf("nil comparison extracted a condition")
 	}
-	if containsExtractedFunctionCondition(nil) {
-		t.Fatalf("nil tree contained extracted function condition")
+	if extractedFunctionCondition(nil, nil) {
+		t.Fatalf("nil function extracted a condition")
 	}
-	if containsExtractedFunctionCondition(NewEmptySubsearchContext()) {
-		t.Fatalf("subsearch should not be treated as an extracted function condition")
-	}
-	if !containsExtractedFunctionCondition(splWhereExpressionForTest(t, `cidrmatch("10.0.0.0/8", src_ip)`)) {
-		t.Fatalf("nested cidrmatch function was not detected")
+	if !extractedFunctionCondition(splParserForTest(t, `cidrmatch("10.0.0.0/8", src_ip)`).Condition().FunctionCall(), nil) {
+		t.Fatalf("bare cidrmatch function was not detected")
 	}
 
 	exhausted := &splExpressionBuilder{conditions: conditions, next: len(conditions)}
 	if got := exhausted.condition(); got != nil {
 		t.Fatalf("exhausted condition builder returned %#v", got)
+	}
+	if !exhausted.incomplete {
+		t.Fatalf("exhausted condition builder did not mark expression incomplete")
 	}
 }
 

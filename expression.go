@@ -345,7 +345,14 @@ func (b *splExpressionBuilder) comparisonExpression(ctx IComparisonExpressionCon
 	if nested := nestedWhereExpression(ctx); nested != nil {
 		return b.whereExpression(nested)
 	}
-	if !comparisonExpressionExtractsCondition(ctx) {
+	if condition := ctx.Condition(); condition != nil && condition.FieldName() != nil {
+		fieldLower := strings.ToLower(condition.FieldName().GetText())
+		if isExcludedField(fieldLower) && (condition.ComparisonOp() == nil || !statsColumnNames[fieldLower]) {
+			// Scope metadata is intentionally excluded from event predicates.
+			return nil
+		}
+	}
+	if !comparisonExpressionExtractsCondition(ctx, b.budget) {
 		b.incomplete = true
 		return nil
 	}
@@ -370,33 +377,47 @@ func nestedWhereExpression(node antlr.Tree) IExpressionContext {
 	return nil
 }
 
-func comparisonExpressionExtractsCondition(ctx IComparisonExpressionContext) bool {
+func comparisonExpressionExtractsCondition(ctx IComparisonExpressionContext, budget *parseBudget) bool {
 	if ctx == nil {
 		return false
 	}
-	if ctx.Condition() != nil {
-		return true
+	condition := ctx.Condition()
+	if condition == nil {
+		// A function inside an outer comparison (for example isnull(y)=false)
+		// does not represent the complete Boolean predicate.
+		return false
 	}
-	return containsExtractedFunctionCondition(ctx)
+	if condition.FieldName() != nil {
+		return condition.ComparisonOp() != nil && condition.Value() != nil ||
+			condition.IN() != nil && condition.ValueList() != nil
+	}
+	return extractedFunctionCondition(condition.FunctionCall(), budget)
 }
 
-func containsExtractedFunctionCondition(node antlr.Tree) bool {
-	if node == nil {
+// These are the bare function predicates that EnterFunctionCall emits as a
+// Condition. Argument counts mirror its emission branches.
+func extractedFunctionCondition(ctx IFunctionCallContext, budget *parseBudget) bool {
+	if ctx == nil || ctx.ArgumentList() == nil {
 		return false
 	}
-	switch ctx := node.(type) {
-	case ISubsearchContext:
-		return false
-	case IFunctionCallContext:
-		return ctx.CIDRMATCH() != nil ||
-			ctx.MATCH() != nil ||
-			ctx.LIKE() != nil ||
-			ctx.ISNOTNULL() != nil ||
-			ctx.ISNULL() != nil
+	required := 0
+	if ctx.CIDRMATCH() != nil || ctx.MATCH() != nil || ctx.LIKE() != nil {
+		required = 2
+	} else if ctx.ISNULL() != nil || ctx.ISNOTNULL() != nil {
+		required = 1
 	}
-	for i := 0; i < node.GetChildCount(); i++ {
-		if containsExtractedFunctionCondition(node.GetChild(i)) {
-			return true
+	if required == 0 {
+		return false
+	}
+	count := 0
+	args := ctx.ArgumentList()
+	for i := 0; i < args.GetChildCount(); i++ {
+		budget.step()
+		if _, ok := args.GetChild(i).(IExpressionContext); ok {
+			count++
+			if count == required {
+				return true
+			}
 		}
 	}
 	return false
@@ -405,6 +426,7 @@ func containsExtractedFunctionCondition(node antlr.Tree) bool {
 func (b *splExpressionBuilder) condition() *ConditionExpression {
 	b.budget.step()
 	if b.next >= len(b.conditions) {
+		b.incomplete = true
 		return nil
 	}
 	index := b.next

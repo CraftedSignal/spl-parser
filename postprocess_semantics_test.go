@@ -302,6 +302,60 @@ func TestUnsupportedWhereAtomKeepsExpressionIncomplete(t *testing.T) {
 	}
 }
 
+func TestUnrepresentedWhereBooleanAtomsRemainIncomplete(t *testing.T) {
+	for _, tc := range []struct {
+		query          string
+		values         []string
+		conditionCount int
+	}{
+		{`| where x="u" OR (x="v" AND false())`, []string{"u", "v"}, 2},
+		{`| where (x="u" AND false()) OR x="v"`, []string{"u", "v"}, 2},
+		{`| where NOT (x="u" OR false())`, []string{"u"}, 1},
+		{`| where x="u" OR (x="v" AND mystery(y))`, []string{"u", "v"}, 2},
+		{`| where x="u" OR (x="v" AND y)`, []string{"u", "v"}, 2},
+		{`| where x="u" OR (x="v" AND isnull(y)=false)`, []string{"u", "v"}, 3},
+		{`| where x="u" OR (x="v" AND isnull(y)=true)`, []string{"u", "v"}, 3},
+		{`| where false()`, nil, 0},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			got := ExtractConditions(tc.query)
+			if len(got.Errors) != 0 || !got.ExpressionIncomplete || got.Expression != nil || len(got.Warnings) == 0 {
+				t.Fatalf("unrepresented atom has complete expression: %#v", got)
+			}
+			if len(got.Conditions) != tc.conditionCount {
+				t.Fatalf("event predicates changed: %#v", got.Conditions)
+			}
+			for i, value := range tc.values {
+				if got.Conditions[i].Field != "x" || got.Conditions[i].Value != value || len(got.Conditions[i].Alternatives) != 0 {
+					t.Fatalf("event predicates changed: %#v", got.Conditions)
+				}
+			}
+			semantic := AnalyzeQuery(tc.query)
+			if len(semantic.Errors) != 0 || semantic.Expression != nil || len(semantic.Warnings) == 0 ||
+				(len(tc.values) > 0 && !reflect.DeepEqual(semantic.Conditions, got.Conditions)) ||
+				(len(tc.values) == 0 && len(semantic.Conditions) != 0) {
+				t.Fatalf("semantic projection of incomplete expression: %#v", semantic)
+			}
+		})
+	}
+}
+
+func TestRepresentedBareWhereFunctionControls(t *testing.T) {
+	for _, query := range []string{
+		`| where x="u" AND isnull(y)`,
+		`| where x="u" AND isnotnull(y)`,
+		`| where x="u" AND match(y, "abc")`,
+	} {
+		t.Run(query, func(t *testing.T) {
+			got := ExtractConditions(query)
+			if len(got.Errors) != 0 || got.ExpressionIncomplete || len(got.Warnings) != 0 ||
+				len(got.Conditions) != 2 || !reflect.DeepEqual(got.Expression, branches(BooleanAnd, leaf(0), leaf(1))) {
+				t.Fatalf("represented bare predicate rejected: %#v", got)
+			}
+		})
+	}
+}
+
 func TestLargeProvenOrGroupsStayWithinNormalBudget(t *testing.T) {
 	for _, count := range []int{950, 1000} {
 		t.Run(strconv.Itoa(count), func(t *testing.T) {
