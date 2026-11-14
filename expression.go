@@ -197,6 +197,13 @@ func searchBareWordSpan(ctx IBareWordContext, budget *parseBudget) []string {
 		return strings.Fields(value)
 	}
 	terms := expression.AllSearchTerm()
+	// A whole positive, unquoted search * stage adds no event predicate.
+	// Keep wildcard operands inside Boolean expressions and negated terms.
+	if len(terms) == 1 && value == "*" && term.NOT() == nil {
+		if _, standalone := expression.GetParent().(ISearchCommandContext); standalone {
+			return nil
+		}
+	}
 	for i, candidate := range terms {
 		budget.step()
 		if candidate != term {
