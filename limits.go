@@ -191,6 +191,25 @@ func (e *conditionExtractor) appendCondition(condition Condition) {
 	e.conditions = append(e.conditions, condition)
 }
 
+func (e *conditionExtractor) appendSourcedCondition(condition Condition, source antlr.Tree) {
+	e.appendCondition(condition)
+	if e.conditionSources == nil {
+		return
+	}
+	e.budget.step() // map insertion or span growth shares the parse work budget
+	index := len(e.conditions) - 1
+	binding, found := e.conditionSources[source]
+	if !found {
+		e.conditionSources[source] = conditionSourceBinding{first: index, count: 1}
+		return
+	}
+	if binding.first+binding.count != index {
+		binding.invalid = true
+	}
+	binding.count++
+	e.conditionSources[source] = binding
+}
+
 func (e *conditionExtractor) checkOutput() {
 	e.budget.outputSize(len(e.conditions))
 }

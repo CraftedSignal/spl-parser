@@ -73,6 +73,9 @@ represented (for example, `len(y)>2`, `false()`, or `isnull(y)=false` in a
 remain available, while `ExpressionIncomplete` is true and `Expression` is nil.
 `AnalyzeQuery` also leaves its expression nil in that case. Resource entries
 such as `_spl.outputlookup` are metadata and do not become expression leaves.
+Boolean expressions are complete only when each predicate is directly represented
+by an extracted condition; parentheses preserve that proof, while arithmetic or
+an outer comparison around a predicate does not.
 
 ```go
 // Extract with full context

@@ -83,16 +83,16 @@ func TestSPLExpressionBuilderHelperEdges(t *testing.T) {
 	if got := builder.comparisonExpression(nil); got != nil {
 		t.Fatalf("nil comparison expression returned %#v", got)
 	}
-	if got := nestedWhereExpression(nil); got != nil {
-		t.Fatalf("nil nested expression returned %#v", got)
+	if got := classifyComparison(nil, nil); got.kind != predicateUnsupported {
+		t.Fatalf("nil comparison shape = %#v", got)
 	}
-	if comparisonExpressionExtractsCondition(nil, nil) {
-		t.Fatalf("nil comparison extracted a condition")
+	if got := classifyCondition(nil, nil); got.kind != predicateUnsupported {
+		t.Fatalf("nil condition shape = %#v", got)
 	}
-	if extractedFunctionCondition(nil, nil) {
+	if representedBareFunction(nil, nil) {
 		t.Fatalf("nil function extracted a condition")
 	}
-	if !extractedFunctionCondition(splParserForTest(t, `cidrmatch("10.0.0.0/8", src_ip)`).Condition().FunctionCall(), nil) {
+	if !representedBareFunction(splParserForTest(t, `cidrmatch("10.0.0.0/8", src_ip)`).Condition().FunctionCall(), nil) {
 		t.Fatalf("bare cidrmatch function was not detected")
 	}
 

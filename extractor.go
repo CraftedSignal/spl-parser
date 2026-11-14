@@ -132,25 +132,26 @@ func IsCommandKeyword(field string) bool {
 type conditionExtractor struct {
 	budget *parseBudget
 	*BaseSPLParserListener
-	conditions      []Condition
-	groupByFields   []string          // Fields from stats BY clauses
-	aggregations    []Aggregation     // Aggregations computed by stats-like commands
-	computedFields  map[string]string // Fields created by eval commands: computed field -> source field
-	fieldAliases    map[string]string // Rename mappings: new name -> original name
-	commands        []string          // Commands used in the query (stats, eventstats, etc.)
-	joins           []JoinInfo        // Extracted join info
-	subsearches     []*ParseResult    // Direct subsearch parse results
-	currentStage    int
-	inSubsearch     int // depth of subsearch nesting
-	inFunctionCall  int // depth of function call nesting (eval, count, etc.)
-	inStatsFunction int // depth of stats function nesting (count(), sum(), etc.)
-	inEvalCommand   int // depth of eval command expressions; assignments compute fields, they do not filter events
-	inWhereCommand  int // depth of where command predicates
-	negated         bool
-	lastLogicalOp   string
-	errors          []string
-	tokenStream     *antlr.CommonTokenStream // Needed to extract subsearch text
-	originalQuery   string                   // Original query string for text extraction
+	conditions       []Condition
+	conditionSources conditionSourceBindings
+	groupByFields    []string          // Fields from stats BY clauses
+	aggregations     []Aggregation     // Aggregations computed by stats-like commands
+	computedFields   map[string]string // Fields created by eval commands: computed field -> source field
+	fieldAliases     map[string]string // Rename mappings: new name -> original name
+	commands         []string          // Commands used in the query (stats, eventstats, etc.)
+	joins            []JoinInfo        // Extracted join info
+	subsearches      []*ParseResult    // Direct subsearch parse results
+	currentStage     int
+	inSubsearch      int // depth of subsearch nesting
+	inFunctionCall   int // depth of function call nesting (eval, count, etc.)
+	inStatsFunction  int // depth of stats function nesting (count(), sum(), etc.)
+	inEvalCommand    int // depth of eval command expressions; assignments compute fields, they do not filter events
+	inWhereCommand   int // depth of where command predicates
+	negated          bool
+	lastLogicalOp    string
+	errors           []string
+	tokenStream      *antlr.CommonTokenStream // Needed to extract subsearch text
+	originalQuery    string                   // Original query string for text extraction
 }
 
 // errorListener collects parse errors
@@ -1705,17 +1706,19 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	tree := parser.Query()
 
 	// Walk the tree to extract conditions
+	budget.step() // source-binding map allocation
 	extractor := &conditionExtractor{
-		budget:         budget,
-		conditions:     make([]Condition, 0),
-		computedFields: make(map[string]string), // computed field -> source field
-		fieldAliases:   make(map[string]string), // rename mappings: new name -> original name
-		commands:       make([]string, 0),
-		joins:          make([]JoinInfo, 0),
-		subsearches:    make([]*ParseResult, 0),
-		lastLogicalOp:  "AND", // default
-		tokenStream:    stream,
-		originalQuery:  query,
+		budget:           budget,
+		conditions:       make([]Condition, 0),
+		conditionSources: make(conditionSourceBindings),
+		computedFields:   make(map[string]string), // computed field -> source field
+		fieldAliases:     make(map[string]string), // rename mappings: new name -> original name
+		commands:         make([]string, 0),
+		joins:            make([]JoinInfo, 0),
+		subsearches:      make([]*ParseResult, 0),
+		lastLogicalOp:    "AND", // default
+		tokenStream:      stream,
+		originalQuery:    query,
 	}
 	antlr.ParseTreeWalkerDefault.Walk(extractor, tree)
 	budget.check()
@@ -1738,7 +1741,7 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	var rawExpression *ConditionExpression
 	if !incomplete {
 		var missingAtom bool
-		rawExpression, missingAtom = buildConditionExpressionWithCompleteness(tree, rawConditions, budget)
+		rawExpression, missingAtom = buildConditionExpressionWithCompleteness(tree, rawConditions, budget, extractor.conditionSources)
 		incomplete = missingAtom
 	}
 	conditions, conditionIndexMap := groupORConditionsByExpression(rawConditions, rawExpression, budget)
@@ -2059,7 +2062,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.appendCondition(cond)
+				e.appendSourcedCondition(cond, ctx)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -2083,7 +2086,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.appendCondition(cond)
+				e.appendSourcedCondition(cond, ctx)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -2109,7 +2112,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.appendCondition(cond)
+				e.appendSourcedCondition(cond, ctx)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -2131,7 +2134,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.appendCondition(cond)
+				e.appendSourcedCondition(cond, ctx)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -2153,7 +2156,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.appendCondition(cond)
+				e.appendSourcedCondition(cond, ctx)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -2770,7 +2773,7 @@ func (e *conditionExtractor) EnterBareWord(ctx *BareWordContext) {
 			Field: "_raw", Operator: "contains", Value: value,
 			Negated: negated, PipeStage: e.currentStage, LogicalOp: e.lastLogicalOp,
 		}
-		e.appendCondition(cond)
+		e.appendSourcedCondition(cond, ctx)
 		e.lastLogicalOp = "AND"
 	}
 
@@ -2834,7 +2837,7 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 			IsComputed:     isComputed,
 			SourceField:    sourceField,
 		}
-		e.appendCondition(cond)
+		e.appendSourcedCondition(cond, ctx)
 		e.lastLogicalOp = "AND" // reset to default
 	}
 
@@ -2868,7 +2871,7 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 			IsComputed:   isComputed,
 			SourceField:  sourceField,
 		}
-		e.appendCondition(cond)
+		e.appendSourcedCondition(cond, ctx)
 		e.lastLogicalOp = "AND"
 	}
 }

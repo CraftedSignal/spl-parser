@@ -24,20 +24,23 @@ type ConditionExpression struct {
 }
 
 func buildConditionExpression(tree antlr.Tree, conditions []Condition, budget *parseBudget) *ConditionExpression {
-	expression, _ := buildConditionExpressionWithCompleteness(tree, conditions, budget)
+	expression, _ := buildConditionExpressionWithCompleteness(tree, conditions, budget, nil)
 	return expression
 }
 
 // A nil expression can be intentional for a single filter or a command with
 // no event predicate. incomplete distinguishes it from a dropped Boolean atom.
-func buildConditionExpressionWithCompleteness(tree antlr.Tree, conditions []Condition, budget *parseBudget) (*ConditionExpression, bool) {
+func buildConditionExpressionWithCompleteness(tree antlr.Tree, conditions []Condition, budget *parseBudget, sources conditionSourceBindings) (*ConditionExpression, bool) {
 	if tree == nil {
 		return nil, false
 	}
-	if expression, incomplete := buildPipelineConditionExpressionWithCompleteness(tree, conditions, budget); incomplete {
+	if expression, incomplete := buildPipelineConditionExpressionWithCompleteness(tree, conditions, budget, sources); incomplete {
 		return nil, true
 	} else if expression != nil && len(conditions) >= 2 {
 		return expression, false
+	}
+	if sources != nil {
+		return nil, false
 	}
 	if len(conditions) < 2 {
 		return nil, false
@@ -55,11 +58,23 @@ func buildConditionExpressionWithCompleteness(tree antlr.Tree, conditions []Cond
 	return nil, false
 }
 
-func buildPipelineConditionExpressionWithCompleteness(tree antlr.Tree, conditions []Condition, budget *parseBudget) (*ConditionExpression, bool) {
-	builder := &splExpressionBuilder{conditions: conditions, budget: budget}
+func buildPipelineConditionExpressionWithCompleteness(tree antlr.Tree, conditions []Condition, budget *parseBudget, sources conditionSourceBindings) (*ConditionExpression, bool) {
+	builder := &splExpressionBuilder{conditions: conditions, budget: budget, sources: sources}
+	if sources != nil {
+		budget.step()
+		builder.used = make([]bool, len(conditions))
+	}
 	expression := builder.tree(tree)
 	if builder.incomplete {
 		return nil, true
+	}
+	if sources != nil {
+		for _, used := range builder.used {
+			budget.step()
+			if !used {
+				return nil, true
+			}
+		}
 	}
 	if expression != nil && builder.next == len(conditions) {
 		return expression, false
@@ -70,9 +85,19 @@ func buildPipelineConditionExpressionWithCompleteness(tree antlr.Tree, condition
 type splExpressionBuilder struct {
 	budget     *parseBudget
 	conditions []Condition
+	sources    conditionSourceBindings
+	used       []bool
 	next       int
 	incomplete bool
 }
+
+type conditionSourceBinding struct {
+	first   int
+	count   int
+	invalid bool
+}
+
+type conditionSourceBindings map[antlr.Tree]conditionSourceBinding
 
 func (b *splExpressionBuilder) tree(node antlr.Tree) *ConditionExpression {
 	b.budget.step()
@@ -178,12 +203,23 @@ func (b *splExpressionBuilder) searchTermExpressions(ctx ISearchTermContext) []*
 		return []*ConditionExpression{b.searchExpression(nested)}
 	}
 	if ctx.Condition() != nil {
-		return []*ConditionExpression{b.condition()}
+		shape := classifyCondition(ctx.Condition(), b.budget)
+		switch shape.kind {
+		case predicateAtom:
+			return []*ConditionExpression{b.boundCondition(shape.source, 0, 1)}
+		case predicateNeutral:
+			return nil
+		default:
+			b.incomplete = true
+			return nil
+		}
 	}
 	if bare := ctx.BareWord(); bare != nil && bareWordIsSearchPredicate(bare, b.budget) {
 		var parts []*ConditionExpression
-		for range searchBareWordSpan(bare, b.budget) {
-			parts = append(parts, b.condition())
+		span := searchBareWordSpan(bare, b.budget)
+		for i := range span {
+			b.budget.step()
+			parts = append(parts, b.boundCondition(bare, i, len(span)))
 		}
 		return parts
 	}
@@ -342,85 +378,188 @@ func (b *splExpressionBuilder) comparisonExpression(ctx IComparisonExpressionCon
 	if ctx == nil {
 		return nil
 	}
-	if nested := nestedWhereExpression(ctx); nested != nil {
-		return b.whereExpression(nested)
-	}
-	if condition := ctx.Condition(); condition != nil && condition.FieldName() != nil {
-		fieldLower := strings.ToLower(condition.FieldName().GetText())
-		if isExcludedField(fieldLower) && (condition.ComparisonOp() == nil || !statsColumnNames[fieldLower]) {
-			// Scope metadata is intentionally excluded from event predicates.
-			return nil
-		}
-	}
-	if !comparisonExpressionExtractsCondition(ctx, b.budget) {
+	shape := classifyComparison(ctx, b.budget)
+	switch shape.kind {
+	case predicateAtom:
+		return b.boundCondition(shape.source, 0, 1)
+	case predicateParenthesis:
+		return b.whereExpression(shape.nested)
+	case predicateNeutral:
+		return nil
+	default:
 		b.incomplete = true
 		return nil
 	}
-	return b.condition()
 }
 
-func nestedWhereExpression(node antlr.Tree) IExpressionContext {
-	if node == nil {
-		return nil
-	}
-	switch ctx := node.(type) {
-	case IFunctionCallContext:
-		return nil
-	case IExpressionContext:
-		return ctx
-	}
-	for i := 0; i < node.GetChildCount(); i++ {
-		if nested := nestedWhereExpression(node.GetChild(i)); nested != nil {
-			return nested
-		}
-	}
-	return nil
+type predicateShapeKind uint8
+
+const (
+	predicateUnsupported predicateShapeKind = iota
+	predicateAtom
+	predicateParenthesis
+	predicateNeutral
+)
+
+type predicateShape struct {
+	kind   predicateShapeKind
+	source antlr.Tree
+	nested IExpressionContext
 }
 
-func comparisonExpressionExtractsCondition(ctx IComparisonExpressionContext, budget *parseBudget) bool {
+func directRuleChild[T antlr.Tree](node antlr.Tree, budget *parseBudget) (T, bool) {
+	var zero T
+	budget.step()
+	if node == nil || node.GetChildCount() != 1 {
+		return zero, false
+	}
+	child, ok := node.GetChild(0).(T)
+	return child, ok
+}
+
+// classifyComparison descends only through a complete operator-free grammar
+// chain. A recognizable descendant of arithmetic or an outer comparison is
+// never enough to claim the whole predicate.
+func classifyComparison(ctx IComparisonExpressionContext, budget *parseBudget) predicateShape {
 	if ctx == nil {
-		return false
+		return predicateShape{}
 	}
-	condition := ctx.Condition()
-	if condition == nil {
-		// A function inside an outer comparison (for example isnull(y)=false)
-		// does not represent the complete Boolean predicate.
-		return false
+	if condition, ok := directRuleChild[IConditionContext](ctx, budget); ok {
+		return classifyCondition(condition, budget)
 	}
-	if condition.FieldName() != nil {
-		return condition.ComparisonOp() != nil && condition.Value() != nil ||
-			condition.IN() != nil && condition.ValueList() != nil
+	additive, ok := directRuleChild[IAdditiveExpressionContext](ctx, budget)
+	if !ok {
+		return predicateShape{}
 	}
-	return extractedFunctionCondition(condition.FunctionCall(), budget)
+	multiplicative, ok := directRuleChild[IMultiplicativeExpressionContext](additive, budget)
+	if !ok {
+		return predicateShape{}
+	}
+	unary, ok := directRuleChild[IUnaryExpressionContext](multiplicative, budget)
+	if !ok {
+		return predicateShape{}
+	}
+	primary, ok := directRuleChild[IPrimaryExpressionContext](unary, budget)
+	if !ok || primary.GetChildCount() != 3 || primary.LPAREN() == nil || primary.RPAREN() == nil || primary.Expression() == nil {
+		return predicateShape{}
+	}
+	budget.step()
+	if primary.GetChild(0) != primary.LPAREN() || primary.GetChild(1) != primary.Expression() || primary.GetChild(2) != primary.RPAREN() {
+		return predicateShape{}
+	}
+	return predicateShape{kind: predicateParenthesis, nested: primary.Expression()}
 }
 
-// These are the bare function predicates that EnterFunctionCall emits as a
-// Condition. Argument counts mirror its emission branches.
-func extractedFunctionCondition(ctx IFunctionCallContext, budget *parseBudget) bool {
-	if ctx == nil || ctx.ArgumentList() == nil {
-		return false
+func classifyCondition(ctx IConditionContext, budget *parseBudget) predicateShape {
+	budget.step()
+	if ctx == nil {
+		return predicateShape{}
 	}
-	required := 0
-	if ctx.CIDRMATCH() != nil || ctx.MATCH() != nil || ctx.LIKE() != nil {
-		required = 2
-	} else if ctx.ISNULL() != nil || ctx.ISNOTNULL() != nil {
-		required = 1
-	}
-	if required == 0 {
-		return false
-	}
-	count := 0
-	args := ctx.ArgumentList()
-	for i := 0; i < args.GetChildCount(); i++ {
-		budget.step()
-		if _, ok := args.GetChild(i).(IExpressionContext); ok {
-			count++
-			if count == required {
-				return true
-			}
+	if ctx.FieldName() != nil {
+		comparison := ctx.ComparisonOp() != nil && ctx.Value() != nil && ctx.GetChildCount() == 3 &&
+			ctx.GetChild(0) == ctx.FieldName() && ctx.GetChild(1) == ctx.ComparisonOp() && ctx.GetChild(2) == ctx.Value()
+		literalIN := ctx.IN() != nil && ctx.ValueList() != nil && ctx.Subsearch() == nil && ctx.GetChildCount() == 5 &&
+			ctx.GetChild(0) == ctx.FieldName() && ctx.GetChild(1) == ctx.IN() && ctx.GetChild(2) == ctx.LPAREN() &&
+			ctx.GetChild(3) == ctx.ValueList() && ctx.GetChild(4) == ctx.RPAREN()
+		if !comparison && !literalIN {
+			return predicateShape{}
 		}
+		fieldLower := strings.ToLower(ctx.FieldName().GetText())
+		if isExcludedField(fieldLower) && (!comparison || !statsColumnNames[fieldLower]) {
+			return predicateShape{kind: predicateNeutral}
+		}
+		return predicateShape{kind: predicateAtom, source: ctx}
+	}
+	call, ok := directRuleChild[IFunctionCallContext](ctx, budget)
+	if !ok || !representedBareFunction(call, budget) {
+		return predicateShape{}
+	}
+	return predicateShape{kind: predicateAtom, source: call}
+}
+
+func representedBareFunction(call IFunctionCallContext, budget *parseBudget) bool {
+	budget.step()
+	if call == nil || call.ArgumentList() == nil || call.GetChildCount() != 4 ||
+		call.GetChild(1) != call.LPAREN() || call.GetChild(2) != call.ArgumentList() || call.GetChild(3) != call.RPAREN() {
+		return false
+	}
+	args := call.ArgumentList()
+	if call.ISNULL() != nil || call.ISNOTNULL() != nil {
+		if args.GetChildCount() != 1 {
+			return false
+		}
+		field, ok := args.GetChild(0).(IExpressionContext)
+		return ok && directFieldArgument(field, budget)
+	}
+	if args.GetChildCount() != 3 || args.COMMA(0) == nil {
+		return false
+	}
+	first, firstOK := args.GetChild(0).(IExpressionContext)
+	second, secondOK := args.GetChild(2).(IExpressionContext)
+	if !firstOK || !secondOK || args.GetChild(1) != args.COMMA(0) {
+		return false
+	}
+	if call.CIDRMATCH() != nil {
+		return directQuotedArgument(first, budget) && directFieldArgument(second, budget)
+	}
+	return (call.MATCH() != nil || call.LIKE() != nil) && directFieldArgument(first, budget) && directQuotedArgument(second, budget)
+}
+
+func directArgumentPrimary(ctx IExpressionContext, budget *parseBudget) IPrimaryExpressionContext {
+	or, ok := directRuleChild[IOrExpressionContext](ctx, budget)
+	if !ok {
+		return nil
+	}
+	and, ok := directRuleChild[IAndExpressionContext](or, budget)
+	if !ok {
+		return nil
+	}
+	not, ok := directRuleChild[INotExpressionContext](and, budget)
+	if !ok {
+		return nil
+	}
+	comparison, ok := directRuleChild[IComparisonExpressionContext](not, budget)
+	if !ok {
+		return nil
+	}
+	additive, ok := directRuleChild[IAdditiveExpressionContext](comparison, budget)
+	if !ok {
+		return nil
+	}
+	multiplicative, ok := directRuleChild[IMultiplicativeExpressionContext](additive, budget)
+	if !ok {
+		return nil
+	}
+	unary, ok := directRuleChild[IUnaryExpressionContext](multiplicative, budget)
+	if !ok {
+		return nil
+	}
+	primary, ok := directRuleChild[IPrimaryExpressionContext](unary, budget)
+	if !ok {
+		return nil
+	}
+	return primary
+}
+
+func directFieldArgument(ctx IExpressionContext, budget *parseBudget) bool {
+	primary := directArgumentPrimary(ctx, budget)
+	if primary == nil || primary.GetChildCount() != 1 {
+		return false
+	}
+	if primary.FieldName() != nil {
+		return primary.GetChild(0) == primary.FieldName()
+	}
+	if value := primary.Value(); value != nil && value.IDENTIFIER() != nil && value.GetChildCount() == 1 {
+		lower := strings.ToLower(value.GetText())
+		return primary.GetChild(0) == value && lower != "true" && lower != "false" && lower != "null"
 	}
 	return false
+}
+
+func directQuotedArgument(ctx IExpressionContext, budget *parseBudget) bool {
+	primary := directArgumentPrimary(ctx, budget)
+	return primary != nil && primary.GetChildCount() == 1 && primary.Value() != nil && primary.GetChild(0) == primary.Value() &&
+		primary.Value().GetChildCount() == 1 && primary.Value().QUOTED_STRING() != nil
 }
 
 func (b *splExpressionBuilder) condition() *ConditionExpression {
@@ -430,6 +569,26 @@ func (b *splExpressionBuilder) condition() *ConditionExpression {
 		return nil
 	}
 	index := b.next
+	b.next++
+	return &ConditionExpression{Operator: BooleanCondition, ConditionIndex: index}
+}
+
+func (b *splExpressionBuilder) boundCondition(source antlr.Tree, offset, cardinality int) *ConditionExpression {
+	if b.sources == nil {
+		return b.condition()
+	}
+	b.budget.step()
+	binding, found := b.sources[source]
+	if !found || binding.invalid || binding.count != cardinality || offset < 0 || offset >= cardinality {
+		b.incomplete = true
+		return nil
+	}
+	index := binding.first + offset
+	if index < 0 || index >= len(b.used) || index != b.next || b.used[index] {
+		b.incomplete = true
+		return nil
+	}
+	b.used[index] = true
 	b.next++
 	return &ConditionExpression{Operator: BooleanCondition, ConditionIndex: index}
 }
