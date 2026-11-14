@@ -15,6 +15,7 @@ type SemanticQuery struct {
 	Joins          []SemanticJoin      `json:"joins,omitempty"`
 	Subsearches    []*SemanticQuery    `json:"subsearches,omitempty"`
 	Errors         []string            `json:"errors,omitempty"`
+	Warnings       []string            `json:"warnings,omitempty"`
 }
 
 // SemanticExpression preserves boolean grouping while pointing directly at
@@ -76,9 +77,10 @@ func semanticFromExtraction(result *ParseResult, budget *parseBudget) *SemanticQ
 		FieldAliases:   cloneSemanticStringMap(result.FieldAliases, budget),
 		Commands:       cloneSemanticStrings(result.Commands, budget),
 		Errors:         cloneSemanticStrings(result.Errors, budget),
+		Warnings:       cloneSemanticStrings(result.Warnings, budget),
 	}
 	semantic.Expression = semanticExpressionFromParseExpression(result.Expression, semantic.Conditions, budget)
-	if semantic.Expression == nil {
+	if semantic.Expression == nil && !result.ExpressionIncomplete {
 		semantic.Expression = semanticExpressionFromConditions(semantic.Conditions, budget)
 	}
 	semantic.Joins = semanticJoinsFromParseJoins(result.Joins, budget)
