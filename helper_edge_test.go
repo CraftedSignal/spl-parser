@@ -125,7 +125,7 @@ func TestIsCommandKeywordCaseInsensitive(t *testing.T) {
 }
 
 func TestPortableNegationWordBoundaries(t *testing.T) {
-	conditions := extractPortablePredicatesFromText(`not_user="alice" AND path="C:\notepad.exe" AND NOT action="allow"`, 0)
+	conditions := extractPortablePredicatesFromText(`not_user="alice" AND path="C:\notepad.exe" AND NOT action="allow"`, 0, nil)
 
 	assertHasConditionWithNegation(t, conditions, ExpectedCondition{Field: "not_user", Operator: "=", Value: "alice"}, false)
 	assertHasConditionWithNegation(t, conditions, ExpectedCondition{Field: "path", Operator: "=", Value: `C:\notepad.exe`}, false)
