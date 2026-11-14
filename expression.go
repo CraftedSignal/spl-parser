@@ -392,7 +392,12 @@ func (b *splExpressionBuilder) condition() *ConditionExpression {
 	return &ConditionExpression{Operator: BooleanCondition, ConditionIndex: index}
 }
 
-func remapConditionExpression(expression *ConditionExpression, indexMap []int) *ConditionExpression {
+func remapConditionExpression(expression *ConditionExpression, indexMap []int, budgets ...*parseBudget) *ConditionExpression {
+	var budget *parseBudget
+	if len(budgets) > 0 {
+		budget = budgets[0]
+	}
+	budget.step()
 	if expression == nil || len(indexMap) == 0 {
 		return expression
 	}
@@ -409,17 +414,19 @@ func remapConditionExpression(expression *ConditionExpression, indexMap []int) *
 	case BooleanAnd, BooleanOr:
 		converted := &ConditionExpression{Operator: expression.Operator}
 		for _, child := range expression.Children {
-			remapped := remapConditionExpression(child, indexMap)
+			budget.step()
+			remapped := remapConditionExpression(child, indexMap, budget)
 			if remapped == nil {
 				continue
 			}
 			if remapped.Operator == expression.Operator {
 				for _, grandchild := range remapped.Children {
-					converted.Children = appendUniqueConditionExpression(converted.Children, grandchild)
+					budget.step()
+					converted.Children = appendUniqueConditionExpression(converted.Children, grandchild, budget)
 				}
 				continue
 			}
-			converted.Children = appendUniqueConditionExpression(converted.Children, remapped)
+			converted.Children = appendUniqueConditionExpression(converted.Children, remapped, budget)
 		}
 		if len(converted.Children) == 0 {
 			return nil
@@ -433,16 +440,26 @@ func remapConditionExpression(expression *ConditionExpression, indexMap []int) *
 	}
 }
 
-func appendUniqueConditionExpression(children []*ConditionExpression, child *ConditionExpression) []*ConditionExpression {
+func appendUniqueConditionExpression(children []*ConditionExpression, child *ConditionExpression, budgets ...*parseBudget) []*ConditionExpression {
+	var budget *parseBudget
+	if len(budgets) > 0 {
+		budget = budgets[0]
+	}
 	for _, existing := range children {
-		if equalConditionExpression(existing, child) {
+		budget.step()
+		if equalConditionExpression(existing, child, budget) {
 			return children
 		}
 	}
 	return append(children, child)
 }
 
-func equalConditionExpression(a, b *ConditionExpression) bool {
+func equalConditionExpression(a, b *ConditionExpression, budgets ...*parseBudget) bool {
+	var budget *parseBudget
+	if len(budgets) > 0 {
+		budget = budgets[0]
+	}
+	budget.step()
 	if a == nil || b == nil {
 		return a == b
 	}
@@ -450,7 +467,8 @@ func equalConditionExpression(a, b *ConditionExpression) bool {
 		return false
 	}
 	for i := range a.Children {
-		if !equalConditionExpression(a.Children[i], b.Children[i]) {
+		budget.step()
+		if !equalConditionExpression(a.Children[i], b.Children[i], budget) {
 			return false
 		}
 	}

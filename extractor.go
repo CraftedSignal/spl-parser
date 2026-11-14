@@ -2,9 +2,9 @@ package spl
 
 import (
 	"context"
-	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -480,7 +480,7 @@ func extractPortableSPLConditionsDepth(normalized string, depth int, budget *par
 	conditions = budget.appendConditions(conditions, extractDatasetPowerQueryConditions(normalized, budget)...)
 	conditions = budget.appendConditions(conditions, extractQuotedSearchOptionConditions(normalized, depth, budget)...)
 	conditions = budget.appendConditions(conditions, extractSubsearchConditions(normalized, depth, budget)...)
-	return deduplicateConditions(conditions)
+	return deduplicateConditions(conditions, budget)
 }
 
 func splitSPLPipelineSegments(query string) []string {
@@ -1024,7 +1024,7 @@ func extractEmbeddedPredicateConditions(text string, stage int, budget *parseBud
 	if len(conditions) == 0 && looksLikePortablePredicate(text) {
 		conditions = budget.appendConditions(conditions, extractPortablePredicatesFromText(text, stage, budget)...)
 	}
-	return deduplicateConditions(conditions)
+	return deduplicateConditions(conditions, budget)
 }
 
 func extractParenthesizedPredicateBlockConditions(text string, stage int, budget *parseBudget) []Condition {
@@ -1039,7 +1039,7 @@ func extractParenthesizedPredicateBlockConditions(text string, stage int, budget
 		}
 		conditions = budget.appendConditions(conditions, extractEmbeddedPredicateConditions(block, stage, budget)...)
 	}
-	return deduplicateConditions(conditions)
+	return deduplicateConditions(conditions, budget)
 }
 
 func splitParenthesizedBlocks(text string) []string {
@@ -1263,7 +1263,7 @@ func parseLDAPFilterConditions(filter string, stage int, budget *parseBudget) []
 	budget.step()
 
 	parser := ldapFilterParser{text: filter, stage: stage, budget: budget}
-	return deduplicateConditions(parser.parse())
+	return deduplicateConditions(parser.parse(), budget)
 }
 
 type ldapFilterParser struct {
@@ -1437,7 +1437,7 @@ func extractCommandResourceConditions(query string, budget *parseBudget) []Condi
 			}
 		}
 	}
-	return deduplicateConditions(conditions)
+	return deduplicateConditions(conditions, budget)
 }
 
 func resourceCondition(field, value string, stage int) Condition {
@@ -1601,21 +1601,67 @@ func trimMatchingQuotes(value string) string {
 	return value
 }
 
-func deduplicateConditions(conditions []Condition) []Condition {
-	seen := make(map[string]bool, len(conditions))
+type conditionIdentity struct {
+	field, operator, value, valueReference string
+	logicalOp, sourceField, alternatives   string
+	negated, isComputed                    bool
+	pipeStage                              int
+}
+
+func identityOfCondition(condition Condition, budget *parseBudget) conditionIdentity {
+	var alternatives strings.Builder
+	for _, value := range condition.Alternatives {
+		budget.step()
+		alternatives.WriteString(strconv.Itoa(len(value)))
+		alternatives.WriteByte(':')
+		alternatives.WriteString(value)
+	}
+	return conditionIdentity{
+		field: condition.Field, operator: condition.Operator, value: condition.Value,
+		valueReference: condition.ValueReference, logicalOp: condition.LogicalOp,
+		sourceField: condition.SourceField, alternatives: alternatives.String(),
+		negated: condition.Negated, isComputed: condition.IsComputed, pipeStage: condition.PipeStage,
+	}
+}
+
+func deduplicateConditions(conditions []Condition, budgets ...*parseBudget) []Condition {
+	var budget *parseBudget
+	if len(budgets) > 0 {
+		budget = budgets[0]
+	}
+	out, _ := deduplicateConditionsWithIndexMap(conditions, budget)
+	return out
+}
+
+func deduplicateConditionsWithIndexMap(conditions []Condition, budget *parseBudget) ([]Condition, []int) {
+	seen := make(map[conditionIdentity]int, len(conditions))
 	out := make([]Condition, 0, len(conditions))
-	for _, condition := range conditions {
-		key := strings.ToLower(condition.Field) + "\x00" +
-			strings.ToLower(condition.Operator) + "\x00" +
-			condition.Value + "\x00" +
-			fmt.Sprint(condition.Negated)
-		if seen[key] {
+	indexMap := make([]int, len(conditions))
+	for i, condition := range conditions {
+		budget.step()
+		key := identityOfCondition(condition, budget)
+		if index, ok := seen[key]; ok {
+			indexMap[i] = index
 			continue
 		}
-		seen[key] = true
+		indexMap[i] = len(out)
+		seen[key] = len(out)
+		condition.Alternatives = cloneConditionAlternatives(condition.Alternatives, budget)
 		out = append(out, condition)
 	}
-	return out
+	return out, indexMap
+}
+
+func cloneConditionAlternatives(values []string, budget *parseBudget) []string {
+	if values == nil {
+		return nil
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		budget.step()
+		result = append(result, value)
+	}
+	return result
 }
 
 // ExtractConditions parses an SPL query and extracts all field conditions.
@@ -1701,7 +1747,9 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 			expression = nil
 			recoveredWithPortableExtraction = len(allErrors) > 0
 		}
-		conditions = deduplicateConditions(append(conditions, resourceConditions...))
+		var indexMap []int
+		conditions, indexMap = deduplicateConditionsWithIndexMap(append(conditions, resourceConditions...), budget)
+		expression = remapConditionExpression(expression, indexMap, budget)
 	}
 	if recoveredWithPortableExtraction {
 		allErrors = nil
