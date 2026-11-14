@@ -104,7 +104,10 @@ func (b *splExpressionBuilder) searchExpression(ctx ISearchExpressionContext) *C
 		// tstats and mstats without a where clause
 		return nil
 	}
-	var expression *ConditionExpression
+	// Search has higher OR precedence than explicit and implicit AND.
+	// Finish each contiguous OR group before joining it to the conjunction.
+	// whereExpression uses the separate AND-before-OR expression grammar.
+	var expression, orGroup *ConditionExpression
 	operator := BooleanAnd
 	for _, child := range ctx.GetChildren() {
 		switch node := child.(type) {
@@ -119,11 +122,16 @@ func (b *splExpressionBuilder) searchExpression(ctx ISearchExpressionContext) *C
 				operator = BooleanAnd
 				continue
 			}
-			expression = combineConditionExpressions(operator, expression, next)
+			if operator == BooleanOr {
+				orGroup = combineConditionExpressions(BooleanOr, orGroup, next)
+			} else {
+				expression = combineConditionExpressions(BooleanAnd, expression, orGroup)
+				orGroup = next
+			}
 			operator = BooleanAnd
 		}
 	}
-	return expression
+	return combineConditionExpressions(BooleanAnd, expression, orGroup)
 }
 
 func (b *splExpressionBuilder) searchTerm(ctx ISearchTermContext) *ConditionExpression {
