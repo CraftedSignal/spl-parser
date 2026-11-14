@@ -2571,31 +2571,29 @@ func startsWithDigit(s string) bool {
 	return s[0] >= '0' && s[0] <= '9'
 }
 
-// EnterBareWord extracts bare search terms (quoted strings used as fulltext search)
+// EnterBareWord extracts fulltext search terms, preserving their authored case
+// and wildcard patterns in the same representation as quoted keywords.
 func (e *conditionExtractor) EnterBareWord(ctx *BareWordContext) {
 	// Skip inside subsearches
-	if e.inSubsearch > 0 {
+	if e.inSubsearch > 0 || !bareWordIsSearchPredicate(ctx) {
 		return
 	}
 
-	// Only extract quoted strings as keyword conditions
-	if ctx.QUOTED_STRING() != nil {
-		value := ctx.QUOTED_STRING().GetText()
-		// Remove quotes
-		value = trimMatchingQuotes(value)
+	value := ctx.GetText()
+	// Remove quotes
+	value = trimMatchingQuotes(value)
 
-		// Create a keyword condition (field="_raw" or "_keyword")
-		cond := Condition{
-			Field:     "_raw",
-			Operator:  "contains",
-			Value:     value,
-			Negated:   e.negated,
-			PipeStage: e.currentStage,
-			LogicalOp: e.lastLogicalOp,
-		}
-		e.conditions = append(e.conditions, cond)
-		e.lastLogicalOp = "AND"
+	// Create a keyword condition (field="_raw" or "_keyword")
+	cond := Condition{
+		Field:     "_raw",
+		Operator:  "contains",
+		Value:     value,
+		Negated:   e.negated,
+		PipeStage: e.currentStage,
+		LogicalOp: e.lastLogicalOp,
 	}
+	e.conditions = append(e.conditions, cond)
+	e.lastLogicalOp = "AND"
 }
 
 // EnterCondition extracts field conditions

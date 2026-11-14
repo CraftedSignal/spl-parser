@@ -144,10 +144,22 @@ func (b *splExpressionBuilder) searchTerm(ctx ISearchTermContext) *ConditionExpr
 	if nested := ctx.SearchExpression(); nested != nil {
 		return b.searchExpression(nested)
 	}
-	if ctx.Condition() != nil {
+	if ctx.Condition() != nil || (ctx.BareWord() != nil && bareWordIsSearchPredicate(ctx.BareWord())) {
 		return b.condition()
 	}
 	return nil
+}
+
+// The grammar also accepts unknown pipeline commands as implicit searches.
+// Only the initial stage can be an implicit search; subsequent searches use
+// SEARCH. Do not turn an unknown command name or its arguments into keywords.
+func bareWordIsSearchPredicate(ctx IBareWordContext) bool {
+	for parent := ctx.GetParent(); parent != nil; parent = parent.GetParent() {
+		if search, ok := parent.(ISearchCommandContext); ok {
+			return search.SEARCH() != nil || search.GetStart().GetTokenIndex() == 0
+		}
+	}
+	return true
 }
 
 func (b *splExpressionBuilder) whereExpression(ctx IExpressionContext) *ConditionExpression {

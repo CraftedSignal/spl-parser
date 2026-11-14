@@ -20,7 +20,7 @@ func TestSearchBooleanPrecedence(t *testing.T) {
 		{"or_and_or", `a=1 OR b=2 AND c=3 OR d=4`, "and(or(a,b),or(c,d))", func(a, b, c, d bool) bool { return (a || b) && (c || d) }},
 		{"mixed_implicit_and", `a=1 b=2 OR c=3 d=4`, "and(a,or(b,c),d)", func(a, b, c, d bool) bool { return a && (b || c) && d }},
 		{"not_term", `a=1 AND NOT b=2 OR c=3`, "and(a,or(!b,c))", func(a, b, c, d bool) bool { return a && (!b || c) }},
-		{"not_group", `NOT (a=1 AND b=2 OR c=3)`, "or(!a,and(!b,!c))", func(a, b, c, d bool) bool { return !(a && (b || c)) }},
+		{"not_group", `NOT (a=1 AND b=2 OR c=3)`, "or(!a,and(!b,!c))", func(a, b, c, d bool) bool { return !a || (!b && !c) }},
 		{"parenthesized_and", `(a=1 AND b=2) OR c=3`, "or(and(a,b),c)", func(a, b, c, d bool) bool { return (a && b) || c }},
 		{"parenthesized_or", `a=1 AND (b=2 OR c=3)`, "and(a,or(b,c))", func(a, b, c, d bool) bool { return a && (b || c) }},
 	}
@@ -177,4 +177,73 @@ func precedenceMatches(expr *SemanticExpression, values map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+func TestSearchBooleanPrecedenceWithBareTerms(t *testing.T) {
+	for _, tc := range []struct {
+		query, want, value string
+		negated            bool
+	}{
+		{`a=1 AND * OR b=2`, "and(a,or(_raw,b))", "*", false},
+		{`a=1 keyword OR b=2`, "and(a,or(_raw,b))", "keyword", false},
+		{`a=1 AND "keyword" OR b=2`, "and(a,or(_raw,b))", "keyword", false},
+		{`a=1 AND "KeyWord" OR b=2`, "and(a,or(_raw,b))", "KeyWord", false},
+		{`a=1 AND KeyWord OR b=2`, "and(a,or(_raw,b))", "KeyWord", false},
+		{`a=1 AND 42 OR b=2`, "and(a,or(_raw,b))", "42", false},
+		{`a=1 AND "key*" OR b=2`, "and(a,or(_raw,b))", "key*", false},
+		{`a=1 AND "*" OR b=2`, "and(a,or(_raw,b))", "*", false},
+		{`a=1 AND NOT keyword OR b=2`, "and(a,or(!_raw,b))", "keyword", true},
+		{`NOT (a=1 AND keyword OR b=2)`, "or(!a,and(!_raw,!b))", "keyword", true},
+		{`(a=1 AND keyword) OR b=2`, "or(and(a,_raw),b)", "keyword", false},
+	} {
+		for _, prefix := range []string{"", "search ", "| makeresults | search "} {
+			t.Run(prefix+tc.query, func(t *testing.T) {
+				result := ExtractConditions(prefix + tc.query)
+				if len(result.Errors) > 0 {
+					t.Fatalf("errors: %v", result.Errors)
+				}
+				if got := precedenceParseShape(result.Expression, result.Conditions); got != tc.want {
+					t.Fatalf("tree = %s, want %s; conditions %#v", got, tc.want, result.Conditions)
+				}
+				if len(result.Conditions) != 3 {
+					t.Fatalf("conditions = %#v, want three", result.Conditions)
+				}
+				keyword := result.Conditions[1]
+				if keyword.Field != "_raw" || keyword.Operator != "contains" || keyword.Value != tc.value || keyword.Negated != tc.negated {
+					t.Fatalf("keyword = %#v", keyword)
+				}
+				semantic := AnalyzeQuery(prefix + tc.query)
+				if got := precedenceSemanticShape(semantic.Expression); got != tc.want {
+					t.Fatalf("semantic tree = %s, want %s", got, tc.want)
+				}
+				// A true final disjunct cannot bypass the first conjunction operand.
+				if !strings.HasPrefix(tc.query, "NOT") && !strings.HasPrefix(tc.query, "(") {
+					if precedenceMatches(semantic.Expression, map[string]bool{"a": false, "b": true, "_raw": true}) {
+						t.Fatal("a=false, b=true matched across the AND boundary")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestSearchBooleanPrecedenceWildcardTruthTable(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		want  func(a, b bool) bool
+	}{
+		{`a=1 AND * OR b=2`, func(a, b bool) bool { return a }},
+		{`a=1 AND NOT * OR b=2`, func(a, b bool) bool { return a && b }},
+		{`NOT (a=1 AND * OR b=2)`, func(a, b bool) bool { return !a }},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			semantic := AnalyzeQuery(tc.query)
+			for bits := 0; bits < 4; bits++ {
+				a, b := bits&1 != 0, bits&2 != 0
+				if got, want := precedenceMatches(semantic.Expression, map[string]bool{"a": a, "b": b, "_raw": true}), tc.want(a, b); got != want {
+					t.Errorf("a=%t b=%t: got %t want %t", a, b, got, want)
+				}
+			}
+		})
+	}
 }
