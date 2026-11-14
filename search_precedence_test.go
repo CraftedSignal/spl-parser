@@ -95,17 +95,19 @@ func TestBooleanPrecedenceAcrossPipelineStages(t *testing.T) {
 }
 
 func TestSearchBooleanPrecedenceWithSameFieldDisjunction(t *testing.T) {
+	// The b leaves are direct OR siblings, so compacting them preserves the
+	// search precedence while retaining both literal values.
 	result := ExtractConditions(`a=1 AND b=2 OR b=3`)
 	if len(result.Errors) > 0 {
 		t.Fatalf("parse errors: %v", result.Errors)
 	}
-	if got := precedenceParseShape(result.Expression, result.Conditions); got != "and(a,or(b,b))" {
-		t.Fatalf("tree = %s, want and(a,or(b,b))", got)
+	if got := precedenceParseShape(result.Expression, result.Conditions); got != "and(a,b)" {
+		t.Fatalf("tree = %s, want and(a,b)", got)
 	}
-	requireConditionIndex(t, result.Expression.Children[1].Children[0], 1)
-	requireConditionIndex(t, result.Expression.Children[1].Children[1], 2)
-	if len(result.Conditions) != 3 || result.Conditions[1].Value != "2" || result.Conditions[2].Value != "3" {
-		t.Fatalf("conditions = %#v, want a and separate b=2/b=3 leaves", result.Conditions)
+	requireConditionIndex(t, result.Expression.Children[1], 1)
+	if len(result.Conditions) != 2 || result.Conditions[1].Value != "2" ||
+		len(result.Conditions[1].Alternatives) != 2 || result.Conditions[1].Alternatives[1] != "3" {
+		t.Fatalf("conditions = %#v, want a and b=2/b=3 alternatives", result.Conditions)
 	}
 }
 

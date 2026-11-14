@@ -223,12 +223,12 @@ func TestSPLValueGroupingAndDedupEdges(t *testing.T) {
 		}
 	}
 
-	grouped := groupORConditions([]Condition{
+	grouped, _ := groupORConditionsByExpression([]Condition{
 		{Field: "index", Operator: "=", Value: "main", LogicalOp: "AND"},
 		{Field: "Image", Operator: "like", Value: "*cmd*", LogicalOp: "AND"},
 		{Field: "Image", Operator: "like", Value: "*powershell*", LogicalOp: "OR"},
 		{Field: "User", Operator: "=", Value: "alice", LogicalOp: "AND"},
-	})
+	}, branches(BooleanAnd, leaf(0), branches(BooleanOr, leaf(1), leaf(2)), leaf(3)), nil)
 	image := requireSPLCondition(t, grouped, "Image", "like", "*cmd*", false)
 	if len(image.Alternatives) != 2 || image.Alternatives[1] != "*powershell*" {
 		t.Fatalf("OR alternatives were not grouped: %#v", image)

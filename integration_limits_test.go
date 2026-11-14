@@ -47,11 +47,14 @@ func TestConcurrentContextRequestsKeepBudgetsIndependent(t *testing.T) {
 				t.Fatalf("canceled extraction returned partial output: %#v", failed)
 			}
 			semantic := AnalyzeQueryContext(context.Background(), keyword+" OR beta gamma `unknown`")
-			if len(semantic.Errors) != 0 || len(semantic.Conditions) != 2 || semantic.Expression != nil || len(semantic.Warnings) != 1 {
+			if len(semantic.Errors) != 0 || len(semantic.Conditions) != 3 || semantic.Expression != nil || len(semantic.Warnings) != 1 {
 				t.Fatalf("independent semantic request lost search semantics: %#v", semantic)
 			}
-			if alternatives := semantic.Conditions[0].Alternatives; len(alternatives) != 2 || alternatives[0] != keyword || alternatives[1] != "beta" || semantic.Conditions[1].Value != "gamma" {
-				t.Fatalf("independent request lost keyword/glob grouping: %#v", semantic.Conditions)
+			// The macro makes expression ancestry incomplete, so all portable
+			// values remain separate instead of guessing which ORs are siblings.
+			if semantic.Conditions[0].Value != keyword || semantic.Conditions[1].Value != "beta" || semantic.Conditions[2].Value != "gamma" ||
+				len(semantic.Conditions[0].Alternatives) != 0 || len(semantic.Conditions[1].Alternatives) != 0 {
+				t.Fatalf("independent request lost keyword/glob values: %#v", semantic.Conditions)
 			}
 			if stages, err := ClassifyPipelineStagesContext(context.Background(), keyword+` OR beta gamma | stats count`); err != nil || len(stages) != 2 {
 				t.Fatalf("independent classification failed: stages=%v, error=%v", stages, err)

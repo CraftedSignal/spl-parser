@@ -2,9 +2,9 @@ package spl
 
 import (
 	"context"
-	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -132,25 +132,26 @@ func IsCommandKeyword(field string) bool {
 type conditionExtractor struct {
 	budget *parseBudget
 	*BaseSPLParserListener
-	conditions      []Condition
-	groupByFields   []string          // Fields from stats BY clauses
-	aggregations    []Aggregation     // Aggregations computed by stats-like commands
-	computedFields  map[string]string // Fields created by eval commands: computed field -> source field
-	fieldAliases    map[string]string // Rename mappings: new name -> original name
-	commands        []string          // Commands used in the query (stats, eventstats, etc.)
-	joins           []JoinInfo        // Extracted join info
-	subsearches     []*ParseResult    // Direct subsearch parse results
-	currentStage    int
-	inSubsearch     int // depth of subsearch nesting
-	inFunctionCall  int // depth of function call nesting (eval, count, etc.)
-	inStatsFunction int // depth of stats function nesting (count(), sum(), etc.)
-	inEvalCommand   int // depth of eval command expressions; assignments compute fields, they do not filter events
-	inWhereCommand  int // depth of where command predicates
-	negated         bool
-	lastLogicalOp   string
-	errors          []string
-	tokenStream     *antlr.CommonTokenStream // Needed to extract subsearch text
-	originalQuery   string                   // Original query string for text extraction
+	conditions       []Condition
+	conditionSources conditionSourceBindings
+	groupByFields    []string          // Fields from stats BY clauses
+	aggregations     []Aggregation     // Aggregations computed by stats-like commands
+	computedFields   map[string]string // Fields created by eval commands: computed field -> source field
+	fieldAliases     map[string]string // Rename mappings: new name -> original name
+	commands         []string          // Commands used in the query (stats, eventstats, etc.)
+	joins            []JoinInfo        // Extracted join info
+	subsearches      []*ParseResult    // Direct subsearch parse results
+	currentStage     int
+	inSubsearch      int // depth of subsearch nesting
+	inFunctionCall   int // depth of function call nesting (eval, count, etc.)
+	inStatsFunction  int // depth of stats function nesting (count(), sum(), etc.)
+	inEvalCommand    int // depth of eval command expressions; assignments compute fields, they do not filter events
+	inWhereCommand   int // depth of where command predicates
+	negated          bool
+	lastLogicalOp    string
+	errors           []string
+	tokenStream      *antlr.CommonTokenStream // Needed to extract subsearch text
+	originalQuery    string                   // Original query string for text extraction
 }
 
 // errorListener collects parse errors
@@ -480,7 +481,7 @@ func extractPortableSPLConditionsDepth(normalized string, depth int, budget *par
 	conditions = budget.appendConditions(conditions, extractDatasetPowerQueryConditions(normalized, budget)...)
 	conditions = budget.appendConditions(conditions, extractQuotedSearchOptionConditions(normalized, depth, budget)...)
 	conditions = budget.appendConditions(conditions, extractSubsearchConditions(normalized, depth, budget)...)
-	return deduplicateConditions(conditions)
+	return deduplicateConditions(conditions, budget)
 }
 
 func splitSPLPipelineSegments(query string) []string {
@@ -1024,7 +1025,7 @@ func extractEmbeddedPredicateConditions(text string, stage int, budget *parseBud
 	if len(conditions) == 0 && looksLikePortablePredicate(text) {
 		conditions = budget.appendConditions(conditions, extractPortablePredicatesFromText(text, stage, budget)...)
 	}
-	return deduplicateConditions(conditions)
+	return deduplicateConditions(conditions, budget)
 }
 
 func extractParenthesizedPredicateBlockConditions(text string, stage int, budget *parseBudget) []Condition {
@@ -1039,7 +1040,7 @@ func extractParenthesizedPredicateBlockConditions(text string, stage int, budget
 		}
 		conditions = budget.appendConditions(conditions, extractEmbeddedPredicateConditions(block, stage, budget)...)
 	}
-	return deduplicateConditions(conditions)
+	return deduplicateConditions(conditions, budget)
 }
 
 func splitParenthesizedBlocks(text string) []string {
@@ -1263,7 +1264,7 @@ func parseLDAPFilterConditions(filter string, stage int, budget *parseBudget) []
 	budget.step()
 
 	parser := ldapFilterParser{text: filter, stage: stage, budget: budget}
-	return deduplicateConditions(parser.parse())
+	return deduplicateConditions(parser.parse(), budget)
 }
 
 type ldapFilterParser struct {
@@ -1437,7 +1438,7 @@ func extractCommandResourceConditions(query string, budget *parseBudget) []Condi
 			}
 		}
 	}
-	return deduplicateConditions(conditions)
+	return deduplicateConditions(conditions, budget)
 }
 
 func resourceCondition(field, value string, stage int) Condition {
@@ -1601,21 +1602,67 @@ func trimMatchingQuotes(value string) string {
 	return value
 }
 
-func deduplicateConditions(conditions []Condition) []Condition {
-	seen := make(map[string]bool, len(conditions))
+type conditionIdentity struct {
+	field, operator, value, valueReference string
+	logicalOp, sourceField, alternatives   string
+	negated, isComputed                    bool
+	pipeStage                              int
+}
+
+func identityOfCondition(condition Condition, budget *parseBudget) conditionIdentity {
+	var alternatives strings.Builder
+	for _, value := range condition.Alternatives {
+		budget.step()
+		alternatives.WriteString(strconv.Itoa(len(value)))
+		alternatives.WriteByte(':')
+		alternatives.WriteString(value)
+	}
+	return conditionIdentity{
+		field: condition.Field, operator: condition.Operator, value: condition.Value,
+		valueReference: condition.ValueReference, logicalOp: condition.LogicalOp,
+		sourceField: condition.SourceField, alternatives: alternatives.String(),
+		negated: condition.Negated, isComputed: condition.IsComputed, pipeStage: condition.PipeStage,
+	}
+}
+
+func deduplicateConditions(conditions []Condition, budgets ...*parseBudget) []Condition {
+	var budget *parseBudget
+	if len(budgets) > 0 {
+		budget = budgets[0]
+	}
+	out, _ := deduplicateConditionsWithIndexMap(conditions, budget)
+	return out
+}
+
+func deduplicateConditionsWithIndexMap(conditions []Condition, budget *parseBudget) ([]Condition, []int) {
+	seen := make(map[conditionIdentity]int, len(conditions))
 	out := make([]Condition, 0, len(conditions))
-	for _, condition := range conditions {
-		key := strings.ToLower(condition.Field) + "\x00" +
-			strings.ToLower(condition.Operator) + "\x00" +
-			condition.Value + "\x00" +
-			fmt.Sprint(condition.Negated)
-		if seen[key] {
+	indexMap := make([]int, len(conditions))
+	for i, condition := range conditions {
+		budget.step()
+		key := identityOfCondition(condition, budget)
+		if index, ok := seen[key]; ok {
+			indexMap[i] = index
 			continue
 		}
-		seen[key] = true
+		indexMap[i] = len(out)
+		seen[key] = len(out)
+		condition.Alternatives = cloneConditionAlternatives(condition.Alternatives, budget)
 		out = append(out, condition)
 	}
-	return out
+	return out, indexMap
+}
+
+func cloneConditionAlternatives(values []string, budget *parseBudget) []string {
+	if values == nil {
+		return nil
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		budget.step()
+		result = append(result, value)
+	}
+	return result
 }
 
 // ExtractConditions parses an SPL query and extracts all field conditions.
@@ -1659,17 +1706,19 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	tree := parser.Query()
 
 	// Walk the tree to extract conditions
+	budget.step() // source-binding map allocation
 	extractor := &conditionExtractor{
-		budget:         budget,
-		conditions:     make([]Condition, 0),
-		computedFields: make(map[string]string), // computed field -> source field
-		fieldAliases:   make(map[string]string), // rename mappings: new name -> original name
-		commands:       make([]string, 0),
-		joins:          make([]JoinInfo, 0),
-		subsearches:    make([]*ParseResult, 0),
-		lastLogicalOp:  "AND", // default
-		tokenStream:    stream,
-		originalQuery:  query,
+		budget:           budget,
+		conditions:       make([]Condition, 0),
+		conditionSources: make(conditionSourceBindings),
+		computedFields:   make(map[string]string), // computed field -> source field
+		fieldAliases:     make(map[string]string), // rename mappings: new name -> original name
+		commands:         make([]string, 0),
+		joins:            make([]JoinInfo, 0),
+		subsearches:      make([]*ParseResult, 0),
+		lastLogicalOp:    "AND", // default
+		tokenStream:      stream,
+		originalQuery:    query,
 	}
 	antlr.ParseTreeWalkerDefault.Walk(extractor, tree)
 	budget.check()
@@ -1679,20 +1728,34 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	allErrors := append(lexerErrors.errors, parserErrors.errors...)
 	allErrors = append(allErrors, extractor.errors...)
 
-	// Post-process to group OR conditions on same field
-	rawConditions := append([]Condition(nil), extractor.conditions...)
-	conditions, conditionIndexMap := groupORConditionsWithIndexMap(extractor.conditions)
-	expression := remapConditionExpression(buildConditionExpression(tree, rawConditions, budget), conditionIndexMap)
+	// The raw tree proves which OR operands are atomic siblings. A flat
+	// LogicalOp sequence cannot distinguish a sibling from an AND subtree.
+	rawConditions := make([]Condition, 0, len(extractor.conditions))
+	for _, condition := range extractor.conditions {
+		budget.step()
+		condition.Alternatives = cloneConditionAlternatives(condition.Alternatives, budget)
+		rawConditions = append(rawConditions, condition)
+	}
+	unsupportedSearchOperand := hasUnsupportedSearchOperand(tree, budget)
+	incomplete := unsupportedSearchOperand
+	var rawExpression *ConditionExpression
+	if !incomplete {
+		var missingAtom bool
+		rawExpression, missingAtom = buildConditionExpressionWithCompleteness(tree, rawConditions, budget, extractor.conditionSources)
+		incomplete = missingAtom
+	}
+	conditions, conditionIndexMap := groupORConditionsByExpression(rawConditions, rawExpression, budget)
+	expression := remapConditionExpression(rawExpression, conditionIndexMap, budget)
 	recoveredWithPortableExtraction := false
 	if len(allErrors) > 0 {
 		if portableConditions := extractPortableSPLConditions(query, budget); len(portableConditions) > 0 {
-			conditions = groupORConditions(portableConditions)
+			conditions = portableConditions
 			expression = nil
 			recoveredWithPortableExtraction = true
 		}
 	} else if len(conditions) == 0 {
 		if portableConditions := extractPortableSPLConditions(query, budget); len(portableConditions) > 0 {
-			conditions = groupORConditions(portableConditions)
+			conditions = portableConditions
 			expression = nil
 		}
 	}
@@ -1701,7 +1764,18 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 			expression = nil
 			recoveredWithPortableExtraction = len(allErrors) > 0
 		}
-		conditions = deduplicateConditions(append(conditions, resourceConditions...))
+		combined := make([]Condition, 0, len(conditions)+len(resourceConditions))
+		for _, condition := range conditions {
+			budget.step()
+			combined = append(combined, condition)
+		}
+		for _, condition := range resourceConditions {
+			budget.step()
+			combined = append(combined, condition)
+		}
+		var indexMap []int
+		conditions, indexMap = deduplicateConditionsWithIndexMap(combined, budget)
+		expression = remapConditionExpression(expression, indexMap, budget)
 	}
 	if recoveredWithPortableExtraction {
 		allErrors = nil
@@ -1710,12 +1784,15 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	budget.outputSize(len(conditions))
 	budget.check()
 
-	incomplete := hasUnsupportedSearchOperand(tree, budget)
 	var warnings []string
 	if incomplete {
 		expression = nil
 		budget.reserveOutput(1)
-		warnings = append(warnings, "boolean expression unavailable: search contains an unsupported macro or subsearch operand")
+		warning := "boolean expression unavailable: query contains an unsupported or unrepresented boolean operand"
+		if unsupportedSearchOperand {
+			warning = "boolean expression unavailable: search contains an unsupported macro or subsearch operand"
+		}
+		warnings = append(warnings, warning)
 	}
 	return &ParseResult{
 		ExpressionIncomplete: incomplete,
@@ -1985,7 +2062,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.appendCondition(cond)
+				e.appendSourcedCondition(cond, ctx)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -2009,7 +2086,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.appendCondition(cond)
+				e.appendSourcedCondition(cond, ctx)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -2035,7 +2112,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.appendCondition(cond)
+				e.appendSourcedCondition(cond, ctx)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -2057,7 +2134,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.appendCondition(cond)
+				e.appendSourcedCondition(cond, ctx)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -2079,7 +2156,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.appendCondition(cond)
+				e.appendSourcedCondition(cond, ctx)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -2696,7 +2773,7 @@ func (e *conditionExtractor) EnterBareWord(ctx *BareWordContext) {
 			Field: "_raw", Operator: "contains", Value: value,
 			Negated: negated, PipeStage: e.currentStage, LogicalOp: e.lastLogicalOp,
 		}
-		e.appendCondition(cond)
+		e.appendSourcedCondition(cond, ctx)
 		e.lastLogicalOp = "AND"
 	}
 
@@ -2760,7 +2837,7 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 			IsComputed:     isComputed,
 			SourceField:    sourceField,
 		}
-		e.appendCondition(cond)
+		e.appendSourcedCondition(cond, ctx)
 		e.lastLogicalOp = "AND" // reset to default
 	}
 
@@ -2794,7 +2871,7 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 			IsComputed:   isComputed,
 			SourceField:  sourceField,
 		}
-		e.appendCondition(cond)
+		e.appendSourcedCondition(cond, ctx)
 		e.lastLogicalOp = "AND"
 	}
 }
@@ -2922,80 +2999,98 @@ func extractValueList(ctx IValueListContext) []string {
 	return values
 }
 
-// groupORConditions groups consecutive OR conditions on the same field
-func groupORConditions(conditions []Condition) []Condition {
-	grouped, _ := groupORConditionsWithIndexMap(conditions)
-	return grouped
-}
-
-func groupORConditionsWithIndexMap(conditions []Condition) ([]Condition, []int) {
-	if len(conditions) == 0 {
-		return conditions, nil
+// groupORConditionsByExpression groups only direct atomic siblings of an OR
+// node. The index map always refers to the original raw condition indexes.
+func groupORConditionsByExpression(conditions []Condition, expression *ConditionExpression, budget *parseBudget) ([]Condition, []int) {
+	groupStart := make([]int, len(conditions))
+	for i := range groupStart {
+		budget.step()
+		groupStart[i] = i
 	}
-
-	result := make([]Condition, 0, len(conditions))
-	indexMap := make([]int, len(conditions))
-	for i := range indexMap {
-		indexMap[i] = -1
-	}
-
-	for i := 0; i < len(conditions); i++ {
-		cond := conditions[i]
-
-		// Look ahead for OR conditions on the same field
-		if i+1 < len(conditions) && conditions[i+1].LogicalOp == "OR" && sameConditionGroup(cond, conditions[i+1]) && canStartAlternativeGroup(conditions, i) {
-			alternatives := conditionAlternatives(cond)
-
-			j := i + 1
-			for j < len(conditions) {
-				next := conditions[j]
-				if next.LogicalOp == "OR" && sameConditionGroup(cond, next) {
-					alternatives = append(alternatives, conditionAlternatives(next)...)
-					j++
+	var visit func(*ConditionExpression)
+	visit = func(node *ConditionExpression) {
+		budget.step()
+		if node == nil {
+			return
+		}
+		if node.Operator == BooleanOr {
+			start, previous := -1, -1
+			for _, child := range node.Children {
+				budget.step()
+				if child == nil || child.Operator != BooleanCondition || child.ConditionIndex < 0 || child.ConditionIndex >= len(conditions) {
+					start, previous = -1, -1
+					continue
+				}
+				index := child.ConditionIndex
+				if start >= 0 && index == previous+1 && sameConditionGroup(conditions[start], conditions[index]) {
+					groupStart[index] = start
 				} else {
-					break
+					start = index
 				}
-			}
-
-			if len(alternatives) > 1 {
-				cond.Alternatives = deduplicateConditionValues(alternatives)
-				groupedIndex := len(result)
-				result = append(result, cond)
-				for rawIndex := i; rawIndex < j; rawIndex++ {
-					indexMap[rawIndex] = groupedIndex
-				}
-				i = j - 1 // skip the grouped conditions
-				continue
+				previous = index
 			}
 		}
-
-		indexMap[i] = len(result)
-		result = append(result, cond)
+		for _, child := range node.Children {
+			budget.step()
+			visit(child)
+		}
 	}
+	visit(expression)
 
+	// Accumulate each proven group once. Re-copying and de-duplicating the
+	// growing prefix for every sibling makes ordinary long OR lists quadratic.
+	type alternativesGroup struct {
+		values []string
+		seen   map[string]struct{}
+	}
+	groups := make(map[int]*alternativesGroup)
+	addValues := func(group *alternativesGroup, condition Condition) {
+		values := condition.Alternatives
+		if len(values) == 0 {
+			values = []string{condition.Value}
+		}
+		for _, value := range values {
+			budget.step()
+			if _, exists := group.seen[value]; exists {
+				continue
+			}
+			group.seen[value] = struct{}{}
+			group.values = append(group.values, value)
+		}
+	}
+	result := make([]Condition, 0, len(conditions))
+	indexMap := make([]int, len(conditions))
+	for i, condition := range conditions {
+		budget.step()
+		if start := groupStart[i]; start != i {
+			group := groups[start]
+			if group == nil {
+				budget.step()
+				group = &alternativesGroup{seen: make(map[string]struct{})}
+				groups[start] = group
+				addValues(group, result[indexMap[start]])
+			}
+			addValues(group, condition)
+			indexMap[i] = indexMap[start]
+			continue
+		}
+		indexMap[i] = len(result)
+		condition.Alternatives = cloneConditionAlternatives(condition.Alternatives, budget)
+		result = append(result, condition)
+	}
+	for start, group := range groups {
+		budget.step()
+		result[indexMap[start]].Alternatives = group.values
+	}
 	return result, indexMap
 }
 
-func canStartAlternativeGroup(conditions []Condition, index int) bool {
-	if index == 0 || strings.EqualFold(conditions[index].LogicalOp, "OR") {
-		return true
-	}
-	for i := 0; i < index; i++ {
-		if !IsSearchScopeMetadata(conditions[i].Field) {
-			return false
-		}
-	}
-	return true
-}
-
 func sameConditionGroup(a, b Condition) bool {
-	if a.Negated || b.Negated {
+	if a.Negated || b.Negated || a.IsComputed || b.IsComputed ||
+		a.ValueReference != "" || b.ValueReference != "" || a.Field == "" || a.Operator == "" {
 		return false
 	}
-	if !strings.EqualFold(a.Field, b.Field) ||
-		!strings.EqualFold(a.Operator, b.Operator) ||
-		a.IsComputed != b.IsComputed ||
-		!strings.EqualFold(a.SourceField, b.SourceField) {
+	if a.Field != b.Field || a.Operator != b.Operator || a.PipeStage != b.PipeStage || a.SourceField != b.SourceField {
 		return false
 	}
 	if strings.EqualFold(a.Operator, "like") {
@@ -3018,25 +3113,6 @@ func likePatternKind(pattern string) string {
 	default:
 		return "matches"
 	}
-}
-
-func conditionAlternatives(cond Condition) []string {
-	if len(cond.Alternatives) > 0 {
-		return append([]string(nil), cond.Alternatives...)
-	}
-	return []string{cond.Value}
-}
-
-func deduplicateConditionValues(values []string) []string {
-	seen := make(map[string]bool, len(values))
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		if !seen[value] {
-			seen[value] = true
-			result = append(result, value)
-		}
-	}
-	return result
 }
 
 func conditionDedupKey(cond Condition) string {
