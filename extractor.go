@@ -1,6 +1,7 @@
 package spl
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"sort"
@@ -12,8 +13,8 @@ import (
 	"github.com/antlr4-go/antlr/v4"
 )
 
-// MaxParseTime is the maximum time allowed for parsing a single query.
-// Queries that exceed this are returned with an error.
+// MaxParseTime caps cooperative parsing checks. ANTLR may continue inside a
+// prediction between checks; this is not a hard wall-clock or memory bound.
 var MaxParseTime = 5 * time.Second
 
 // Condition represents a field condition extracted from an SPL query
@@ -32,16 +33,18 @@ type Condition struct {
 
 // ParseResult contains all conditions extracted from the query
 type ParseResult struct {
-	Conditions     []Condition          `json:"conditions"`
-	Expression     *ConditionExpression `json:"expression,omitempty"`
-	GroupByFields  []string             `json:"group_by_fields,omitempty"` // Fields from stats/eventstats/streamstats BY clauses
-	Aggregations   []Aggregation        `json:"aggregations,omitempty"`    // Aggregations computed by stats-like commands, in query order
-	ComputedFields map[string]string    `json:"computed_fields,omitempty"` // Map of computed field name -> source field (from eval/rex)
-	FieldAliases   map[string]string    `json:"field_aliases,omitempty"`   // Map of new name -> original name (from rename)
-	Commands       []string             `json:"commands,omitempty"`        // List of commands used in the query (stats, eventstats, etc.)
-	Joins          []JoinInfo           `json:"joins,omitempty"`           // Extracted join/append info
-	Subsearches    []*ParseResult       `json:"subsearches,omitempty"`     // Recursively parsed direct subsearches
-	Errors         []string             `json:"errors,omitempty"`
+	Conditions           []Condition          `json:"conditions"`
+	Expression           *ConditionExpression `json:"expression,omitempty"`
+	ExpressionIncomplete bool                 `json:"expression_incomplete,omitempty"`
+	Warnings             []string             `json:"warnings,omitempty"`
+	GroupByFields        []string             `json:"group_by_fields,omitempty"` // Fields from stats/eventstats/streamstats BY clauses
+	Aggregations         []Aggregation        `json:"aggregations,omitempty"`    // Aggregations computed by stats-like commands, in query order
+	ComputedFields       map[string]string    `json:"computed_fields,omitempty"` // Map of computed field name -> source field (from eval/rex)
+	FieldAliases         map[string]string    `json:"field_aliases,omitempty"`   // Map of new name -> original name (from rename)
+	Commands             []string             `json:"commands,omitempty"`        // List of commands used in the query (stats, eventstats, etc.)
+	Joins                []JoinInfo           `json:"joins,omitempty"`           // Extracted join/append info
+	Subsearches          []*ParseResult       `json:"subsearches,omitempty"`     // Recursively parsed direct subsearches
+	Errors               []string             `json:"errors,omitempty"`
 }
 
 // Aggregation is one stats-like aggregation and the column it outputs.
@@ -127,6 +130,7 @@ func IsCommandKeyword(field string) bool {
 
 // conditionExtractor walks the parse tree to extract conditions
 type conditionExtractor struct {
+	budget *parseBudget
 	*BaseSPLParserListener
 	conditions      []Condition
 	groupByFields   []string          // Fields from stats BY clauses
@@ -153,9 +157,19 @@ type conditionExtractor struct {
 type errorListener struct {
 	*antlr.DefaultErrorListener
 	errors []string
+	budget *parseBudget
 }
 
 func (l *errorListener) SyntaxError(recognizer antlr.Recognizer, offendingSymbol interface{}, line, column int, msg string, e antlr.RecognitionException) {
+	if l.budget != nil {
+		l.budget.step()
+		if len(l.errors) >= 32 {
+			l.budget.reject("syntax error count")
+		}
+		if len(msg) > 1024 {
+			msg = msg[:1024]
+		}
+	}
 	l.errors = append(l.errors, msg)
 }
 
@@ -433,32 +447,39 @@ var (
 	quotedOptionValuePattern           = `(?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')`
 )
 
-func extractPortableSPLConditions(query string) []Condition {
+func extractPortableSPLConditions(query string, budget *parseBudget) []Condition {
+	budget.step()
+
 	normalized := normalizeSPLQuery(query)
-	conditions := extractPortableSPLConditionsDepth(normalized, 0)
+	conditions := extractPortableSPLConditionsDepth(normalized, 0, budget)
 	if len(conditions) > 0 {
 		return conditions
 	}
 	return nil
 }
 
-func extractPortableSPLConditionsDepth(normalized string, depth int) []Condition {
-	if depth > 6 {
-		return nil
+func extractPortableSPLConditionsDepth(normalized string, depth int, budget *parseBudget) []Condition {
+	defer budget.enterInterpretation(normalized)()
+	budget.step()
+
+	if budget != nil && depth > budget.limits.maxNestingDepth {
+		budget.reject("embedded nesting depth")
 	}
 
 	var conditions []Condition
 	for stage, segment := range splitSPLPipelineSegments(normalized) {
+		budget.step()
+
 		text, ok := portablePredicateSegment(segment, stage == 0)
 		if !ok {
 			continue
 		}
-		conditions = append(conditions, extractPortablePredicatesFromText(text, stage)...)
+		conditions = budget.appendConditions(conditions, extractPortablePredicatesFromText(text, stage, budget)...)
 	}
-	conditions = append(conditions, extractLDAPSearchConditions(normalized)...)
-	conditions = append(conditions, extractDatasetPowerQueryConditions(normalized)...)
-	conditions = append(conditions, extractQuotedSearchOptionConditions(normalized, depth)...)
-	conditions = append(conditions, extractSubsearchConditions(normalized, depth)...)
+	conditions = budget.appendConditions(conditions, extractLDAPSearchConditions(normalized, budget)...)
+	conditions = budget.appendConditions(conditions, extractDatasetPowerQueryConditions(normalized, budget)...)
+	conditions = budget.appendConditions(conditions, extractQuotedSearchOptionConditions(normalized, depth, budget)...)
+	conditions = budget.appendConditions(conditions, extractSubsearchConditions(normalized, depth, budget)...)
 	return deduplicateConditions(conditions)
 }
 
@@ -527,24 +548,34 @@ func portablePredicateSegment(segment string, first bool) (string, bool) {
 	return "", false
 }
 
-func extractPortablePredicatesFromText(text string, stage int) []Condition {
+func extractPortablePredicatesFromText(text string, stage int, budget *parseBudget) []Condition {
+	budget.step()
+
 	text = stripBracketedSubsearches(text)
 	var matches []portableConditionMatch
 	seenSpans := make([][2]int, 0)
 	for _, match := range portableInConditionPattern.FindAllStringSubmatchIndex(text, -1) {
+		budget.step()
+
 		portableMatch := portableInMatch(text, match, stage)
+		budget.outputSize(len(matches) + 1)
 		matches = append(matches, portableMatch)
 		seenSpans = append(seenSpans, [2]int{portableMatch.start, portableMatch.end})
 	}
 	for _, match := range portableFunctionInConditionPattern.FindAllStringSubmatchIndex(text, -1) {
+		budget.step()
+
 		if spanOverlaps(match[0], match[1], seenSpans) {
 			continue
 		}
 		portableMatch := portableInMatch(text, match, stage)
+		budget.outputSize(len(matches) + 1)
 		matches = append(matches, portableMatch)
 		seenSpans = append(seenSpans, [2]int{portableMatch.start, portableMatch.end})
 	}
 	for _, match := range portableNetIPSubnetPattern.FindAllStringSubmatchIndex(text, -1) {
+		budget.step()
+
 		if spanOverlaps(match[0], match[1], seenSpans) {
 			continue
 		}
@@ -556,6 +587,7 @@ func extractPortablePredicatesFromText(text string, stage int) []Condition {
 		if value == "" {
 			continue
 		}
+		budget.outputSize(len(matches) + 1)
 		matches = append(matches, portableConditionMatch{
 			start: match[0],
 			end:   match[1],
@@ -570,6 +602,8 @@ func extractPortablePredicatesFromText(text string, stage int) []Condition {
 		seenSpans = append(seenSpans, [2]int{match[0], match[1]})
 	}
 	for _, match := range portableCidrMatchPattern.FindAllStringSubmatchIndex(text, -1) {
+		budget.step()
+
 		if spanOverlaps(match[0], match[1], seenSpans) {
 			continue
 		}
@@ -578,6 +612,7 @@ func extractPortablePredicatesFromText(text string, stage int) []Condition {
 		if shouldSkipPortableField(field) || value == "" {
 			continue
 		}
+		budget.outputSize(len(matches) + 1)
 		matches = append(matches, portableConditionMatch{
 			start: match[0],
 			end:   match[1],
@@ -592,6 +627,8 @@ func extractPortablePredicatesFromText(text string, stage int) []Condition {
 		seenSpans = append(seenSpans, [2]int{match[0], match[1]})
 	}
 	for _, match := range portableNullFunctionPattern.FindAllStringSubmatchIndex(text, -1) {
+		budget.step()
+
 		if spanOverlaps(match[0], match[1], seenSpans) {
 			continue
 		}
@@ -599,6 +636,7 @@ func extractPortablePredicatesFromText(text string, stage int) []Condition {
 		if shouldSkipPortableField(field) {
 			continue
 		}
+		budget.outputSize(len(matches) + 1)
 		matches = append(matches, portableConditionMatch{
 			start: match[0],
 			end:   match[1],
@@ -612,18 +650,24 @@ func extractPortablePredicatesFromText(text string, stage int) []Condition {
 		seenSpans = append(seenSpans, [2]int{match[0], match[1]})
 	}
 	for _, match := range portableComparisonPattern.FindAllStringSubmatchIndex(text, -1) {
+		budget.step()
+
 		if spanOverlaps(match[0], match[1], seenSpans) {
 			continue
 		}
 		portableMatch := portableComparisonMatch(text, match, stage)
+		budget.outputSize(len(matches) + 1)
 		matches = append(matches, portableMatch)
 		seenSpans = append(seenSpans, [2]int{portableMatch.start, portableMatch.end})
 	}
 	for _, match := range portableFunctionComparisonPattern.FindAllStringSubmatchIndex(text, -1) {
+		budget.step()
+
 		if spanOverlaps(match[0], match[1], seenSpans) {
 			continue
 		}
 		portableMatch := portableComparisonMatch(text, match, stage)
+		budget.outputSize(len(matches) + 1)
 		matches = append(matches, portableMatch)
 		seenSpans = append(seenSpans, [2]int{portableMatch.start, portableMatch.end})
 	}
@@ -632,8 +676,11 @@ func extractPortablePredicatesFromText(text string, stage int) []Condition {
 		return matches[i].start < matches[j].start
 	})
 
+	budget.outputSize(len(matches))
 	conditions := make([]Condition, 0, len(matches))
 	for i, match := range matches {
+		budget.step()
+
 		if match.cond.Field == "" || (match.cond.Value == "" && match.cond.Operator != "isnotnull" && match.cond.Operator != "isnull") {
 			continue
 		}
@@ -642,7 +689,7 @@ func extractPortablePredicatesFromText(text string, stage int) []Condition {
 		} else {
 			match.cond.LogicalOp = portableLogicalOpBefore(text, match.start)
 		}
-		conditions = append(conditions, match.cond)
+		conditions = budget.appendConditions(conditions, match.cond)
 	}
 	return conditions
 }
@@ -686,7 +733,8 @@ func stripBracketedSubsearches(text string) string {
 	return string(out)
 }
 
-func scanBalancedGroupEnd(text string, start int, open, close byte) int {
+func scanBalancedParenthesesEnd(text string, start int) int {
+	const open, close byte = '(', ')'
 	if start < 0 || start >= len(text) || text[start] != open {
 		return -1
 	}
@@ -733,7 +781,7 @@ func portableInMatch(text string, match []int, stage int) portableConditionMatch
 	listEnd := match[9]
 	matchEnd := match[1]
 	if open := match[8] - 1; open >= 0 && text[open] == '(' {
-		if balancedEnd := scanBalancedGroupEnd(text, open, '(', ')'); balancedEnd > listEnd {
+		if balancedEnd := scanBalancedParenthesesEnd(text, open); balancedEnd > listEnd {
 			listEnd = balancedEnd - 1
 			matchEnd = balancedEnd
 		}
@@ -768,7 +816,7 @@ func portableComparisonMatch(text string, match []int, stage int) portableCondit
 	valueEnd := match[11]
 	matchEnd := match[1]
 	if match[10] >= 0 && match[10] < len(text) && text[match[10]] == '(' {
-		if balancedEnd := scanBalancedGroupEnd(text, match[10], '(', ')'); balancedEnd > valueEnd {
+		if balancedEnd := scanBalancedParenthesesEnd(text, match[10]); balancedEnd > valueEnd {
 			valueEnd = balancedEnd
 			matchEnd = balancedEnd
 		}
@@ -909,15 +957,19 @@ func isPortableWordByte(c byte) bool {
 		(c >= '0' && c <= '9')
 }
 
-func extractQuotedSearchOptionConditions(query string, depth int) []Condition {
+func extractQuotedSearchOptionConditions(query string, depth int, budget *parseBudget) []Condition {
+	budget.step()
+
 	var conditions []Condition
-	for _, literal := range extractQuotedOptionValues(query, "search") {
+	for _, literal := range extractQuotedSearchValues(query) {
+		budget.step()
+
 		value := decodeSPLStringLiteral(literal)
 		trimmed := strings.TrimSpace(value)
 		if !looksLikeEmbeddedSearch(trimmed) {
 			continue
 		}
-		conditions = append(conditions, extractPortableSPLConditionsDepth(normalizeSPLQuery(trimmed), depth+1)...)
+		conditions = budget.appendConditions(conditions, extractPortableSPLConditionsDepth(normalizeSPLQuery(trimmed), depth+1, budget)...)
 	}
 	return conditions
 }
@@ -932,45 +984,60 @@ func looksLikeEmbeddedSearch(value string) bool {
 		strings.Contains(lower, " method=powerquery ")
 }
 
-func extractDatasetPowerQueryConditions(query string) []Condition {
+func extractDatasetPowerQueryConditions(query string, budget *parseBudget) []Condition {
+	budget.step()
+
 	var conditions []Condition
 	for stage, segment := range splitSPLPipelineSegments(query) {
+		budget.step()
+
 		lower := strings.ToLower(segment)
 		if !strings.Contains(lower, "dataset") || !strings.Contains(lower, "method=powerquery") {
 			continue
 		}
-		for _, literal := range extractQuotedOptionValues(segment, "search") {
+		for _, literal := range extractQuotedSearchValues(segment) {
+			budget.step()
+
 			value := normalizeEmbeddedPredicateText(decodeSPLStringLiteral(literal))
-			conditions = append(conditions, extractEmbeddedPredicateConditions(value, stage)...)
+			conditions = budget.appendConditions(conditions, extractEmbeddedPredicateConditions(value, stage, budget)...)
 		}
 	}
 	return conditions
 }
 
-func extractEmbeddedPredicateConditions(text string, stage int) []Condition {
+func extractEmbeddedPredicateConditions(text string, stage int, budget *parseBudget) []Condition {
+	defer budget.enterInterpretation(text)()
+	budget.step()
+
 	var conditions []Condition
 	segments := splitSPLPipelineSegments(text)
 	for idx, segment := range segments {
+		budget.step()
+
 		if predicateText, ok := embeddedPredicateSegment(segment, idx == 0); ok {
-			conditions = append(conditions, extractPortablePredicatesFromText(predicateText, stage)...)
+			conditions = budget.appendConditions(conditions, extractPortablePredicatesFromText(predicateText, stage, budget)...)
 		}
 	}
 	if len(conditions) == 0 {
-		conditions = append(conditions, extractParenthesizedPredicateBlockConditions(text, stage)...)
+		conditions = budget.appendConditions(conditions, extractParenthesizedPredicateBlockConditions(text, stage, budget)...)
 	}
 	if len(conditions) == 0 && looksLikePortablePredicate(text) {
-		conditions = append(conditions, extractPortablePredicatesFromText(text, stage)...)
+		conditions = budget.appendConditions(conditions, extractPortablePredicatesFromText(text, stage, budget)...)
 	}
 	return deduplicateConditions(conditions)
 }
 
-func extractParenthesizedPredicateBlockConditions(text string, stage int) []Condition {
+func extractParenthesizedPredicateBlockConditions(text string, stage int, budget *parseBudget) []Condition {
+	budget.step()
+
 	var conditions []Condition
 	for _, block := range splitParenthesizedBlocks(text) {
+		budget.step()
+
 		if !looksLikePortablePredicate(block) {
 			continue
 		}
-		conditions = append(conditions, extractEmbeddedPredicateConditions(block, stage)...)
+		conditions = budget.appendConditions(conditions, extractEmbeddedPredicateConditions(block, stage, budget)...)
 	}
 	return deduplicateConditions(conditions)
 }
@@ -1079,13 +1146,17 @@ func normalizeEmbeddedPredicateText(text string) string {
 	return strings.Join(strings.Fields(text), " ")
 }
 
-func extractSubsearchConditions(query string, depth int) []Condition {
-	if depth > 6 {
-		return nil
+func extractSubsearchConditions(query string, depth int, budget *parseBudget) []Condition {
+	budget.step()
+
+	if budget != nil && depth > budget.limits.maxNestingDepth {
+		budget.reject("embedded nesting depth")
 	}
 	var conditions []Condition
 	for _, subsearch := range splitBracketedSubsearches(query) {
-		conditions = append(conditions, extractPortableSPLConditionsDepth(normalizeSPLQuery(subsearch), depth+1)...)
+		budget.step()
+
+		conditions = budget.appendConditions(conditions, extractPortableSPLConditionsDepth(normalizeSPLQuery(subsearch), depth+1, budget)...)
 	}
 	return conditions
 }
@@ -1130,25 +1201,31 @@ func splitBracketedSubsearches(query string) []string {
 	return subsearches
 }
 
-func extractLDAPSearchConditions(query string) []Condition {
+func extractLDAPSearchConditions(query string, budget *parseBudget) []Condition {
+	budget.step()
+
 	var conditions []Condition
 	for stage, segment := range splitSPLPipelineSegments(query) {
+		budget.step()
+
 		if !strings.Contains(strings.ToLower(segment), "ldapsearch") {
 			continue
 		}
-		for _, literal := range extractQuotedOptionValues(segment, "search") {
+		for _, literal := range extractQuotedSearchValues(segment) {
+			budget.step()
+
 			filter := strings.TrimSpace(decodeSPLStringLiteral(literal))
 			if !strings.HasPrefix(filter, "(") {
 				continue
 			}
-			conditions = append(conditions, parseLDAPFilterConditions(filter, stage)...)
+			conditions = budget.appendConditions(conditions, parseLDAPFilterConditions(filter, stage, budget)...)
 		}
 	}
 	return conditions
 }
 
-func extractQuotedOptionValues(text, optionName string) []string {
-	pattern := regexp.MustCompile(`(?is)\b` + regexp.QuoteMeta(optionName) + `\s*=\s*(` + quotedOptionValuePattern + `)`)
+func extractQuotedSearchValues(text string) []string {
+	pattern := regexp.MustCompile(`(?is)\bsearch\s*=\s*(` + quotedOptionValuePattern + `)`)
 	matches := pattern.FindAllStringSubmatchIndex(text, -1)
 	values := make([]string, 0, len(matches))
 	for _, match := range matches {
@@ -1181,15 +1258,20 @@ func decodeEscapedQuotes(value string) string {
 	return value
 }
 
-func parseLDAPFilterConditions(filter string, stage int) []Condition {
-	parser := ldapFilterParser{text: filter, stage: stage}
+func parseLDAPFilterConditions(filter string, stage int, budget *parseBudget) []Condition {
+	defer budget.enterInterpretation(filter)()
+	budget.step()
+
+	parser := ldapFilterParser{text: filter, stage: stage, budget: budget}
 	return deduplicateConditions(parser.parse())
 }
 
 type ldapFilterParser struct {
-	text  string
-	pos   int
-	stage int
+	budget *parseBudget
+	depth  int
+	text   string
+	pos    int
+	stage  int
 }
 
 func (p *ldapFilterParser) parse() []Condition {
@@ -1199,6 +1281,12 @@ func (p *ldapFilterParser) parse() []Condition {
 }
 
 func (p *ldapFilterParser) parseFilter(negated bool) []Condition {
+	p.budget.step()
+	if p.budget != nil && p.depth >= p.budget.limits.maxNestingDepth {
+		p.budget.reject("LDAP nesting depth")
+	}
+	p.depth++
+	defer func() { p.depth-- }()
 	p.skipSpace()
 	if !p.consume('(') {
 		return nil
@@ -1228,7 +1316,7 @@ func (p *ldapFilterParser) parseFilter(negated bool) []Condition {
 			} else if child[0].LogicalOp == "" {
 				child[0].LogicalOp = "AND"
 			}
-			conditions = append(conditions, child...)
+			conditions = p.budget.appendConditions(conditions, child...)
 			first = false
 		}
 		p.consume(')')
@@ -1249,7 +1337,7 @@ func (p *ldapFilterParser) parseFilter(negated bool) []Condition {
 		if !ok {
 			return nil
 		}
-		return []Condition{condition}
+		return p.budget.appendConditions(nil, condition)
 	}
 }
 
@@ -1272,6 +1360,7 @@ func (p *ldapFilterParser) peek() byte {
 }
 
 func (p *ldapFilterParser) done() bool {
+	p.budget.step()
 	return p.pos >= len(p.text)
 }
 
@@ -1317,30 +1406,34 @@ func splitLDAPAssertion(body string) (field, op, value string, ok bool) {
 	return "", "", "", false
 }
 
-func extractCommandResourceConditions(query string) []Condition {
+func extractCommandResourceConditions(query string, budget *parseBudget) []Condition {
+	budget.step()
+
 	var conditions []Condition
 	for stage, segment := range splitSPLPipelineSegments(query) {
+		budget.step()
+
 		trimmed := strings.TrimSpace(segment)
 		lower := strings.ToLower(trimmed)
 		switch {
 		case strings.HasPrefix(lower, "inputlookup "):
 			if value := firstCommandResourceArg(trimmed, "inputlookup"); value != "" {
-				conditions = append(conditions, resourceCondition("_spl.inputlookup", value, stage))
+				conditions = budget.appendConditions(conditions, resourceCondition("_spl.inputlookup", value, stage))
 			}
 		case strings.HasPrefix(lower, "outputlookup "):
 			if value := firstCommandResourceArg(trimmed, "outputlookup"); value != "" {
-				conditions = append(conditions, resourceCondition("_spl.outputlookup", value, stage))
+				conditions = budget.appendConditions(conditions, resourceCondition("_spl.outputlookup", value, stage))
 			}
 		case strings.HasPrefix(lower, "collect "):
 			if value := extractOptionValue(trimmed, "index"); value != "" {
-				conditions = append(conditions, resourceCondition("_spl.collect.index", value, stage))
+				conditions = budget.appendConditions(conditions, resourceCondition("_spl.collect.index", value, stage))
 			}
 			if value := extractOptionValue(trimmed, "source"); value != "" {
-				conditions = append(conditions, resourceCondition("_spl.collect.source", value, stage))
+				conditions = budget.appendConditions(conditions, resourceCondition("_spl.collect.source", value, stage))
 			}
 		case strings.HasPrefix(lower, "tstats "):
 			if value := extractTstatsDatamodelValue(trimmed); value != "" {
-				conditions = append(conditions, resourceCondition("_spl.datamodel", value, stage))
+				conditions = budget.appendConditions(conditions, resourceCondition("_spl.datamodel", value, stage))
 			}
 		}
 	}
@@ -1526,52 +1619,40 @@ func deduplicateConditions(conditions []Condition) []Condition {
 }
 
 // ExtractConditions parses an SPL query and extracts all field conditions.
-// Uses a timeout (MaxParseTime) to abort queries that cause the parser to hang
-// on deeply nested expressions. Recovers from panics.
+// Applies bounded input, syntax nesting and cooperative work limits.
 func ExtractConditions(query string) *ParseResult {
-	ch := make(chan *ParseResult, 1)
-	go func() {
-		ch <- extractConditionsInternal(query)
-	}()
-
-	select {
-	case result := <-ch:
-		return result
-	case <-time.After(MaxParseTime):
-		return &ParseResult{
-			Conditions: []Condition{},
-			Commands:   []string{},
-			Errors:     []string{fmt.Sprintf("parser timeout: query took longer than %s to parse", MaxParseTime)},
-		}
-	}
+	return ExtractConditionsContext(context.Background(), query)
 }
 
-func extractConditionsInternal(query string) (result *ParseResult) {
+// ExtractConditionsContext applies caller cancellation and MaxParseTime at
+// cooperative boundaries. No parsing goroutine outlives this call.
+func ExtractConditionsContext(ctx context.Context, query string) *ParseResult {
+	return extractConditionsContext(ctx, query, defaultParseLimits())
+}
+
+func extractConditionsContext(ctx context.Context, query string, limits parseLimits) (result *ParseResult) {
 	defer func() {
-		if r := recover(); r != nil {
-			result = &ParseResult{
-				Conditions: []Condition{},
-				Commands:   []string{},
-				Errors:     []string{fmt.Sprintf("parser panic: %v", r)},
-			}
+		if value := recover(); value != nil {
+			result = &ParseResult{Conditions: []Condition{}, Commands: []string{}, Errors: []string{parseFailure(value).Error()}}
 		}
 	}()
+	budget, cancel := newParseBudget(ctx, limits)
+	defer cancel()
+	return extractConditionsInternal(query, budget)
+}
 
+func extractConditionsInternal(query string, budget *parseBudget) (result *ParseResult) {
+	budget.input(query)
+	preflight(query, budget, false, nil)
 	normalizedQuery := normalizeSPLQuery(query)
-	input := antlr.NewInputStream(normalizedQuery)
-	lexer := NewSPLLexer(input)
-
-	// Remove default error listener and add our own
-	lexer.RemoveErrorListeners()
-	lexerErrors := &errorListener{}
-	lexer.AddErrorListener(lexerErrors)
-
-	stream := antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel)
-	parser := NewSPLParser(stream)
+	budget.input(normalizedQuery)
+	lexerErrors := &errorListener{budget: budget}
+	stream := preflight(normalizedQuery, budget, true, lexerErrors)
+	parser := NewSPLParser(&budgetTokenStream{CommonTokenStream: stream, budget: budget})
 
 	// Remove default error listener and add our own
 	parser.RemoveErrorListeners()
-	parserErrors := &errorListener{}
+	parserErrors := &errorListener{budget: budget}
 	parser.AddErrorListener(parserErrors)
 
 	// Parse the query
@@ -1579,6 +1660,7 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 
 	// Walk the tree to extract conditions
 	extractor := &conditionExtractor{
+		budget:         budget,
 		conditions:     make([]Condition, 0),
 		computedFields: make(map[string]string), // computed field -> source field
 		fieldAliases:   make(map[string]string), // rename mappings: new name -> original name
@@ -1590,6 +1672,8 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 		originalQuery:  query,
 	}
 	antlr.ParseTreeWalkerDefault.Walk(extractor, tree)
+	budget.check()
+	extractor.checkOutput()
 
 	// Combine errors
 	allErrors := append(lexerErrors.errors, parserErrors.errors...)
@@ -1598,21 +1682,21 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 	// Post-process to group OR conditions on same field
 	rawConditions := append([]Condition(nil), extractor.conditions...)
 	conditions, conditionIndexMap := groupORConditionsWithIndexMap(extractor.conditions)
-	expression := remapConditionExpression(buildConditionExpression(tree, rawConditions), conditionIndexMap)
+	expression := remapConditionExpression(buildConditionExpression(tree, rawConditions, budget), conditionIndexMap)
 	recoveredWithPortableExtraction := false
 	if len(allErrors) > 0 {
-		if portableConditions := extractPortableSPLConditions(query); len(portableConditions) > 0 {
+		if portableConditions := extractPortableSPLConditions(query, budget); len(portableConditions) > 0 {
 			conditions = groupORConditions(portableConditions)
 			expression = nil
 			recoveredWithPortableExtraction = true
 		}
 	} else if len(conditions) == 0 {
-		if portableConditions := extractPortableSPLConditions(query); len(portableConditions) > 0 {
+		if portableConditions := extractPortableSPLConditions(query, budget); len(portableConditions) > 0 {
 			conditions = groupORConditions(portableConditions)
 			expression = nil
 		}
 	}
-	if resourceConditions := extractCommandResourceConditions(normalizedQuery); len(resourceConditions) > 0 {
+	if resourceConditions := extractCommandResourceConditions(normalizedQuery, budget); len(resourceConditions) > 0 {
 		if len(conditions) == 0 {
 			expression = nil
 			recoveredWithPortableExtraction = len(allErrors) > 0
@@ -1623,17 +1707,29 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 		allErrors = nil
 	}
 
+	budget.outputSize(len(conditions))
+	budget.check()
+
+	incomplete := hasUnsupportedSearchOperand(tree, budget)
+	var warnings []string
+	if incomplete {
+		expression = nil
+		budget.reserveOutput(1)
+		warnings = append(warnings, "boolean expression unavailable: search contains an unsupported macro or subsearch operand")
+	}
 	return &ParseResult{
-		Conditions:     conditions,
-		Expression:     expression,
-		GroupByFields:  extractor.groupByFields,
-		Aggregations:   extractor.aggregations,
-		ComputedFields: extractor.computedFields,
-		FieldAliases:   extractor.fieldAliases,
-		Commands:       extractor.commands,
-		Joins:          extractor.joins,
-		Subsearches:    extractor.subsearches,
-		Errors:         allErrors,
+		ExpressionIncomplete: incomplete,
+		Warnings:             warnings,
+		Conditions:           conditions,
+		Expression:           expression,
+		GroupByFields:        extractor.groupByFields,
+		Aggregations:         extractor.aggregations,
+		ComputedFields:       extractor.computedFields,
+		FieldAliases:         extractor.fieldAliases,
+		Commands:             extractor.commands,
+		Joins:                extractor.joins,
+		Subsearches:          extractor.subsearches,
+		Errors:               allErrors,
 	}
 }
 
@@ -1647,7 +1743,7 @@ func (e *conditionExtractor) EnterSubsearch(ctx *SubsearchContext) {
 	if e.inSubsearch == 0 {
 		subText := strings.TrimSpace(e.extractSubsearchText(ctx))
 		if subText != "" {
-			e.subsearches = append(e.subsearches, ExtractConditions(subText))
+			e.subsearches = append(e.subsearches, extractConditionsInternal(subText, e.budget))
 		}
 	}
 	e.inSubsearch++
@@ -1724,7 +1820,7 @@ func (e *conditionExtractor) EnterJoinCommand(ctx *JoinCommandContext) {
 	if ctx.Subsearch() != nil {
 		subText := e.extractSubsearchText(ctx.Subsearch().(*SubsearchContext))
 		if subText != "" {
-			info.Subsearch = ExtractConditions(subText)
+			info.Subsearch = extractConditionsInternal(subText, e.budget)
 			info.ExposedFields = deriveExposedFields(info.Subsearch, info.JoinFields)
 		}
 	}
@@ -1745,7 +1841,7 @@ func (e *conditionExtractor) EnterAppendCommand(ctx *AppendCommandContext) {
 	if ctx.Subsearch() != nil {
 		subText := e.extractSubsearchText(ctx.Subsearch().(*SubsearchContext))
 		if subText != "" {
-			info.Subsearch = ExtractConditions(subText)
+			info.Subsearch = extractConditionsInternal(subText, e.budget)
 			info.ExposedFields = deriveExposedFields(info.Subsearch, nil)
 		}
 	}
@@ -1889,7 +1985,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.conditions = append(e.conditions, cond)
+				e.appendCondition(cond)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -1913,7 +2009,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.conditions = append(e.conditions, cond)
+				e.appendCondition(cond)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -1939,7 +2035,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.conditions = append(e.conditions, cond)
+				e.appendCondition(cond)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -1961,7 +2057,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.conditions = append(e.conditions, cond)
+				e.appendCondition(cond)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -1983,7 +2079,7 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 					PipeStage: e.currentStage,
 					LogicalOp: e.lastLogicalOp,
 				}
-				e.conditions = append(e.conditions, cond)
+				e.appendCondition(cond)
 				e.lastLogicalOp = "AND"
 			}
 		}
@@ -2570,31 +2666,40 @@ func startsWithDigit(s string) bool {
 	return s[0] >= '0' && s[0] <= '9'
 }
 
-// EnterBareWord extracts bare search terms (quoted strings used as fulltext search)
+// EnterBareWord extracts fulltext search terms, preserving their authored case
+// and wildcard patterns in the same representation as quoted keywords.
 func (e *conditionExtractor) EnterBareWord(ctx *BareWordContext) {
 	// Skip inside subsearches
-	if e.inSubsearch > 0 {
+	if e.inSubsearch > 0 || !bareWordIsSearchPredicate(ctx, e.budget) {
 		return
 	}
 
-	// Only extract quoted strings as keyword conditions
-	if ctx.QUOTED_STRING() != nil {
-		value := ctx.QUOTED_STRING().GetText()
-		// Remove quotes
-		value = trimMatchingQuotes(value)
-
-		// Create a keyword condition (field="_raw" or "_keyword")
-		cond := Condition{
-			Field:     "_raw",
-			Operator:  "contains",
-			Value:     value,
-			Negated:   e.negated,
-			PipeStage: e.currentStage,
-			LogicalOp: e.lastLogicalOp,
+	// A direct NOT applies only to the first whitespace-delimited term,
+	// while negation inherited from a parenthesized group applies to every term.
+	directNot := false
+	for parent := ctx.GetParent(); parent != nil; parent = parent.GetParent() {
+		e.budget.step()
+		term, ok := parent.(ISearchTermContext)
+		if !ok {
+			break
 		}
-		e.conditions = append(e.conditions, cond)
+		if term.NOT() != nil {
+			directNot = !directNot
+		}
+	}
+	for i, value := range searchBareWordSpan(ctx, e.budget) {
+		negated := e.negated
+		if i > 0 && directNot {
+			negated = !negated
+		}
+		cond := Condition{
+			Field: "_raw", Operator: "contains", Value: value,
+			Negated: negated, PipeStage: e.currentStage, LogicalOp: e.lastLogicalOp,
+		}
+		e.appendCondition(cond)
 		e.lastLogicalOp = "AND"
 	}
+
 }
 
 // EnterCondition extracts field conditions
@@ -2655,7 +2760,7 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 			IsComputed:     isComputed,
 			SourceField:    sourceField,
 		}
-		e.conditions = append(e.conditions, cond)
+		e.appendCondition(cond)
 		e.lastLogicalOp = "AND" // reset to default
 	}
 
@@ -2689,7 +2794,7 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 			IsComputed:   isComputed,
 			SourceField:  sourceField,
 		}
-		e.conditions = append(e.conditions, cond)
+		e.appendCondition(cond)
 		e.lastLogicalOp = "AND"
 	}
 }
@@ -2771,12 +2876,7 @@ func (e *conditionExtractor) EnterLogicalOp(ctx *LogicalOpContext) {
 }
 
 // EnterOrExpression handles OR in where clauses
-func (e *conditionExtractor) EnterOrExpression(ctx *OrExpressionContext) {
-	// If there are multiple andExpressions, they're connected by OR
-	if len(ctx.AllAndExpression()) > 1 {
-		// Mark that the next conditions will be ORed
-	}
-}
+func (e *conditionExtractor) EnterOrExpression(_ *OrExpressionContext) {}
 
 // extractValue gets the string value from a value context
 func extractValue(ctx IValueContext) string {
@@ -3098,39 +3198,42 @@ var aggregationCommands = map[string]bool{
 // (e.g. stopping at aggregation stages) without brittle string splitting.
 // Returns nil if parsing fails.
 func ClassifyPipelineStages(query string) []PipelineStageInfo {
-	ch := make(chan []PipelineStageInfo, 1)
-	go func() {
-		ch <- classifyPipelineStagesInternal(query)
-	}()
-
-	select {
-	case result := <-ch:
-		return result
-	case <-time.After(MaxParseTime):
-		return nil
-	}
+	result, _ := ClassifyPipelineStagesContext(context.Background(), query)
+	return result
 }
 
-func classifyPipelineStagesInternal(query string) (result []PipelineStageInfo) {
+// ClassifyPipelineStagesContext reports cancellation and limit rejection.
+func ClassifyPipelineStagesContext(ctx context.Context, query string) ([]PipelineStageInfo, error) {
+	return classifyPipelineStagesContext(ctx, query, defaultParseLimits())
+}
+
+func classifyPipelineStagesContext(ctx context.Context, query string, limits parseLimits) (result []PipelineStageInfo, err error) {
 	defer func() {
-		if r := recover(); r != nil {
+		if value := recover(); value != nil {
 			result = nil
+			err = parseFailure(value)
 		}
 	}()
+	budget, cancel := newParseBudget(ctx, limits)
+	defer cancel()
+	return classifyPipelineStagesInternal(query, budget), nil
+}
 
-	input := antlr.NewInputStream(query)
-	lexer := NewSPLLexer(input)
-	lexer.RemoveErrorListeners()
-	stream := antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel)
-	parser := NewSPLParser(stream)
+func classifyPipelineStagesInternal(query string, budget *parseBudget) []PipelineStageInfo {
+	budget.input(query)
+	stream := preflight(query, budget, true, nil)
+	parser := NewSPLParser(&budgetTokenStream{CommonTokenStream: stream, budget: budget})
 	parser.RemoveErrorListeners()
 
 	tree := parser.Query()
 
+	budget.check()
 	stages := tree.AllPipelineStage()
+	budget.outputSize(len(stages))
 	infos := make([]PipelineStageInfo, len(stages))
 
 	for i, stage := range stages {
+		budget.step()
 		cmdType := classifyStage(stage)
 
 		// Extract original text with whitespace from the query string using
@@ -3154,6 +3257,7 @@ func classifyPipelineStagesInternal(query string) (result []PipelineStageInfo) {
 		}
 	}
 
+	budget.check()
 	return infos
 }
 

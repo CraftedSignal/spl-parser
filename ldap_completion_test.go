@@ -20,14 +20,14 @@ func TestSPLLDAPFilterMalformedInputs(t *testing.T) {
 		`(   `,
 		`(cn)`,
 	} {
-		if got := parseLDAPFilterConditions(input, 3); len(got) != 0 {
+		if got := parseLDAPFilterConditions(input, 3, nil); len(got) != 0 {
 			t.Fatalf("parseLDAPFilterConditions(%q) = %#v, want none", input, got)
 		}
 	}
 }
 
 func TestSPLLDAPFilterKeepsValidChildrenBeforeMalformedChild(t *testing.T) {
-	got := parseLDAPFilterConditions(`(&(cn=alice)(broken))`, 4)
+	got := parseLDAPFilterConditions(`(&(cn=alice)(broken))`, 4, nil)
 	if len(got) != 1 {
 		t.Fatalf("conditions = %#v, want one valid condition", got)
 	}

@@ -3,7 +3,7 @@ package spl
 import "testing"
 
 func TestSPLPortableComparisonRemainingEdges(t *testing.T) {
-	conditions := extractPortablePredicatesFromText(`and="skip" OR .bad="skip" OR empty=() OR user=="alice" OR image=("cmd.exe","powershell.exe")`, 4)
+	conditions := extractPortablePredicatesFromText(`and="skip" OR .bad="skip" OR empty=() OR user=="alice" OR image=("cmd.exe","powershell.exe")`, 4, nil)
 
 	user := requireSPLCondition(t, conditions, "user", "==", "alice", false)
 	if user.PipeStage != 4 {
@@ -30,11 +30,11 @@ func TestSPLPortableComparisonRemainingEdges(t *testing.T) {
 }
 
 func TestSPLPortableFunctionPredicateSkipEdges(t *testing.T) {
-	conditions := extractPortablePredicatesFromText(`net_ip_subnet(and,"10.0.0.0/8") OR net_ip_subnet(src_ip,"") OR cidrmatch("", dest_ip) OR cidrmatch("10.0.0.0/8", null) OR isnull(null) OR isnotnull(and)`, 2)
+	conditions := extractPortablePredicatesFromText(`net_ip_subnet(and,"10.0.0.0/8") OR net_ip_subnet(src_ip,"") OR cidrmatch("", dest_ip) OR cidrmatch("10.0.0.0/8", null) OR isnull(null) OR isnotnull(and)`, 2, nil)
 	if len(conditions) != 0 {
 		t.Fatalf("invalid portable function predicates produced conditions: %#v", conditions)
 	}
-	if got := scanBalancedGroupEnd(`("unterminated`, 0, '(', ')'); got != -1 {
+	if got := scanBalancedParenthesesEnd(`("unterminated`, 0); got != -1 {
 		t.Fatalf("unterminated group end = %d", got)
 	}
 }

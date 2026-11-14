@@ -29,7 +29,7 @@ func FuzzSPLParser(f *testing.F) {
 
 		// Basic sanity checks - these should never fail
 		if result == nil {
-			t.Error("ExtractConditions returned nil")
+			t.Fatal("ExtractConditions returned nil")
 		}
 
 		// Conditions should be a valid slice (even if empty)

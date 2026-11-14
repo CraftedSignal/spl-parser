@@ -19,7 +19,7 @@ func TestPortablePredicateAdvancedExtractionEdges(t *testing.T) {
 		`net_ipsubnet(dest_ip, "192.168.0.0/16") AND NOT isnull(host) AND ` +
 		`lower(Image) contains "cmd" AND process_name matches ("cmd.exe", "powershell.exe") AND severity>=5`
 
-	conditions := extractPortablePredicatesFromText(text, 3)
+	conditions := extractPortablePredicatesFromText(text, 3, nil)
 
 	user := requireSPLCondition(t, conditions, "user", "in", "alice", true)
 	if len(user.Alternatives) != 2 || user.Alternatives[1] != "bob" {
@@ -40,7 +40,7 @@ func TestPortablePredicateAdvancedExtractionEdges(t *testing.T) {
 }
 
 func TestPortablePredicateGuardEdges(t *testing.T) {
-	if got := scanBalancedGroupEnd("abc", 0, '(', ')'); got != -1 {
+	if got := scanBalancedParenthesesEnd("abc", 0); got != -1 {
 		t.Fatalf("non-group start returned %d", got)
 	}
 	if hasWordAt("annot", 2, "not") {
@@ -64,7 +64,7 @@ func TestPortablePredicateGuardEdges(t *testing.T) {
 }
 
 func TestLDAPFilterExtractionEdges(t *testing.T) {
-	conditions := parseLDAPFilterConditions(`(&(objectClass=user)(|(cn=Alice)(cn=Bob))(!(description=disabled))(age>=21)(displayName~=Adm*))`, 2)
+	conditions := parseLDAPFilterConditions(`(&(objectClass=user)(|(cn=Alice)(cn=Bob))(!(description=disabled))(age>=21)(displayName~=Adm*))`, 2, nil)
 
 	requireSPLCondition(t, conditions, "objectClass", "=", "user", false)
 	firstCN := requireSPLCondition(t, conditions, "cn", "=", "Alice", false)
@@ -92,7 +92,7 @@ func TestLDAPFilterExtractionEdges(t *testing.T) {
 }
 
 func TestEmbeddedAndResourceExtractionEdges(t *testing.T) {
-	embedded := extractEmbeddedPredicateConditions(`columns x | where user="alice" | filter status>=400 | search action="blocked"`, 5)
+	embedded := extractEmbeddedPredicateConditions(`columns x | where user="alice" | filter status>=400 | search action="blocked"`, 5, nil)
 	requireSPLCondition(t, embedded, "user", "=", "alice", false)
 	requireSPLCondition(t, embedded, "status", ">=", "400", false)
 	requireSPLCondition(t, embedded, "action", "=", "blocked", false)
@@ -100,12 +100,12 @@ func TestEmbeddedAndResourceExtractionEdges(t *testing.T) {
 	query := `index=main [ search index=child user="alice" ] | ldapsearch search="(|(cn=Alice)(cn=Bob))" | ` +
 		`inputlookup append=true "risky users.csv" | outputlookup create_empty=false saved.csv | ` +
 		`collect index=summary source="alert source" | tstats count FROM datamodel=Endpoint.Processes where Processes.process_name="cmd.exe"`
-	conditions := extractPortableSPLConditionsDepth(normalizeSPLQuery(query), 0)
+	conditions := extractPortableSPLConditionsDepth(normalizeSPLQuery(query), 0, nil)
 	requireSPLCondition(t, conditions, "user", "=", "alice", false)
 	requireSPLCondition(t, conditions, "cn", "=", "Alice", false)
 	requireSPLCondition(t, conditions, "Processes.process_name", "=", "cmd.exe", false)
 
-	resources := extractCommandResourceConditions(query)
+	resources := extractCommandResourceConditions(query, nil)
 	requireSPLCondition(t, resources, "_spl.inputlookup", "=", "risky users.csv", false)
 	requireSPLCondition(t, resources, "_spl.outputlookup", "=", "saved.csv", false)
 	requireSPLCondition(t, resources, "_spl.collect.index", "=", "summary", false)

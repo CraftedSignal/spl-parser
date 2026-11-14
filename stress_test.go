@@ -14,13 +14,18 @@ func TestParserStress(t *testing.T) {
 	rng := rand.New(rand.NewSource(seed))
 	t.Logf("Seed: %d", seed)
 
-	const iterations = 100000
+	iterations := 100000
+	if testing.Short() {
+		// Keep a bounded randomized sample alongside the concurrent isolation
+		// regression in race runs; full coverage still executes all 100k cases.
+		iterations = 1000
+	}
 	var (
-		total         int
-		panics        int
-		parseErrors   int
+		total          int
+		panics         int
+		parseErrors    int
 		withConditions int
-		panicQueries  []string
+		panicQueries   []string
 	)
 
 	for i := 0; i < iterations; i++ {
