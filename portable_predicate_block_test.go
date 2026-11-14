@@ -6,7 +6,7 @@ import (
 )
 
 func TestSPLParenthesizedPredicateBlocksIgnoreNonPredicates(t *testing.T) {
-	conditions := extractParenthesizedPredicateBlockConditions(`metadata type=hosts (not a predicate) (user="alice" OR status=404)`, 6)
+	conditions := extractParenthesizedPredicateBlockConditions(`metadata type=hosts (not a predicate) (user="alice" OR status=404)`, 6, nil)
 
 	requireSPLCondition(t, conditions, "user", "=", "alice", false)
 	status := requireSPLCondition(t, conditions, "status", "=", "404", false)
@@ -16,7 +16,7 @@ func TestSPLParenthesizedPredicateBlocksIgnoreNonPredicates(t *testing.T) {
 }
 
 func TestSPLEmbeddedPredicateBareFallback(t *testing.T) {
-	conditions := extractEmbeddedPredicateConditions(`user="alice" OR status=404`, 7)
+	conditions := extractEmbeddedPredicateConditions(`user="alice" OR status=404`, 7, nil)
 
 	requireSPLCondition(t, conditions, "user", "=", "alice", false)
 	status := requireSPLCondition(t, conditions, "status", "=", "404", false)
@@ -26,7 +26,7 @@ func TestSPLEmbeddedPredicateBareFallback(t *testing.T) {
 }
 
 func TestSPLPortablePredicatesStripSubsearchesButKeepQuotedBrackets(t *testing.T) {
-	conditions := extractPortablePredicatesFromText(`message="[ user=\"not-subsearch\" ]" [ search user="sub" ] user="main"`, 8)
+	conditions := extractPortablePredicatesFromText(`message="[ user=\"not-subsearch\" ]" [ search user="sub" ] user="main"`, 8, nil)
 
 	requireSPLCondition(t, conditions, "message", "=", `[ user="not-subsearch" ]`, false)
 	requireSPLCondition(t, conditions, "user", "=", "main", false)

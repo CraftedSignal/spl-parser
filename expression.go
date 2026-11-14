@@ -23,15 +23,15 @@ type ConditionExpression struct {
 	Children       []*ConditionExpression `json:"children,omitempty"`
 }
 
-func buildConditionExpression(tree antlr.Tree, conditions []Condition) *ConditionExpression {
+func buildConditionExpression(tree antlr.Tree, conditions []Condition, budget *parseBudget) *ConditionExpression {
 	if tree == nil || len(conditions) < 2 {
 		return nil
 	}
-	if expression := buildPipelineConditionExpression(tree, conditions); expression != nil {
+	if expression := buildPipelineConditionExpression(tree, conditions, budget); expression != nil {
 		return expression
 	}
-	for _, candidate := range collectSPLSearchExpressions(tree) {
-		builder := &splExpressionBuilder{conditions: conditions}
+	for _, candidate := range collectSPLSearchExpressions(tree, budget) {
+		builder := &splExpressionBuilder{conditions: conditions, budget: budget}
 		expression := builder.searchExpression(candidate)
 		if expression != nil && builder.next == len(conditions) {
 			return expression
@@ -40,8 +40,8 @@ func buildConditionExpression(tree antlr.Tree, conditions []Condition) *Conditio
 	return nil
 }
 
-func buildPipelineConditionExpression(tree antlr.Tree, conditions []Condition) *ConditionExpression {
-	builder := &splExpressionBuilder{conditions: conditions}
+func buildPipelineConditionExpression(tree antlr.Tree, conditions []Condition, budget *parseBudget) *ConditionExpression {
+	builder := &splExpressionBuilder{conditions: conditions, budget: budget}
 	expression := builder.tree(tree)
 	if expression != nil && builder.next == len(conditions) {
 		return expression
@@ -50,11 +50,13 @@ func buildPipelineConditionExpression(tree antlr.Tree, conditions []Condition) *
 }
 
 type splExpressionBuilder struct {
+	budget     *parseBudget
 	conditions []Condition
 	next       int
 }
 
 func (b *splExpressionBuilder) tree(node antlr.Tree) *ConditionExpression {
+	b.budget.step()
 	if node == nil {
 		return nil
 	}
@@ -81,10 +83,11 @@ func (b *splExpressionBuilder) tree(node antlr.Tree) *ConditionExpression {
 	return expression
 }
 
-func collectSPLSearchExpressions(tree antlr.Tree) []ISearchExpressionContext {
+func collectSPLSearchExpressions(tree antlr.Tree, budget *parseBudget) []ISearchExpressionContext {
 	var expressions []ISearchExpressionContext
 	var visit func(antlr.Tree)
 	visit = func(node antlr.Tree) {
+		budget.step()
 		if node == nil {
 			return
 		}
@@ -100,6 +103,7 @@ func collectSPLSearchExpressions(tree antlr.Tree) []ISearchExpressionContext {
 }
 
 func (b *splExpressionBuilder) searchExpression(ctx ISearchExpressionContext) *ConditionExpression {
+	b.budget.step()
 	if ctx == nil {
 		// tstats and mstats without a where clause
 		return nil
@@ -140,6 +144,7 @@ func (b *splExpressionBuilder) searchTerm(ctx ISearchTermContext) *ConditionExpr
 }
 
 func (b *splExpressionBuilder) searchTermExpressions(ctx ISearchTermContext) []*ConditionExpression {
+	b.budget.step()
 	if ctx == nil {
 		return nil
 	}
@@ -156,9 +161,9 @@ func (b *splExpressionBuilder) searchTermExpressions(ctx ISearchTermContext) []*
 	if ctx.Condition() != nil {
 		return []*ConditionExpression{b.condition()}
 	}
-	if bare := ctx.BareWord(); bare != nil && bareWordIsSearchPredicate(bare) {
+	if bare := ctx.BareWord(); bare != nil && bareWordIsSearchPredicate(bare, b.budget) {
 		var parts []*ConditionExpression
-		for range searchBareWordSpan(bare) {
+		for range searchBareWordSpan(bare, b.budget) {
 			parts = append(parts, b.condition())
 		}
 		return parts
@@ -169,7 +174,8 @@ func (b *splExpressionBuilder) searchTermExpressions(ctx ISearchTermContext) []*
 // searchBareWordSpan joins only physically adjacent unquoted bare-word pieces.
 // The grammar can parse key* as two terms, whereas key * is an implicit AND.
 // Extraction and expression construction must consume the same single leaf.
-func searchBareWordSpan(ctx IBareWordContext) []string {
+func searchBareWordSpan(ctx IBareWordContext, budget *parseBudget) []string {
+	budget.step()
 	value := ctx.GetStart().GetInputStream().GetText(ctx.GetStart().GetStart(), ctx.GetStop().GetStop())
 	if ctx.QUOTED_STRING() != nil {
 		return []string{trimMatchingQuotes(value)}
@@ -179,6 +185,7 @@ func searchBareWordSpan(ctx IBareWordContext) []string {
 		return strings.Fields(value)
 	}
 	for {
+		budget.step()
 		parent, nested := term.GetParent().(ISearchTermContext)
 		if !nested {
 			break
@@ -191,13 +198,14 @@ func searchBareWordSpan(ctx IBareWordContext) []string {
 	}
 	terms := expression.AllSearchTerm()
 	for i, candidate := range terms {
+		budget.step()
 		if candidate != term {
 			continue
 		}
-		if i > 0 && adjacentBareSearchTerms(terms[i-1], candidate) {
+		if i > 0 && adjacentBareSearchTerms(terms[i-1], candidate, budget) {
 			return nil
 		}
-		for j := i + 1; j < len(terms) && adjacentBareSearchTerms(terms[j-1], terms[j]); j++ {
+		for j := i + 1; j < len(terms) && adjacentBareSearchTerms(terms[j-1], terms[j], budget); j++ {
 			value = ctx.GetStart().GetInputStream().GetText(ctx.GetStart().GetStart(), terms[j].GetStop().GetStop())
 		}
 		break
@@ -205,8 +213,10 @@ func searchBareWordSpan(ctx IBareWordContext) []string {
 	return strings.Fields(value)
 }
 
-func adjacentBareSearchTerms(left, right ISearchTermContext) bool {
+func adjacentBareSearchTerms(left, right ISearchTermContext, budget *parseBudget) bool {
+	budget.step()
 	for left.NOT() != nil {
+		budget.step()
 		left = left.SearchTerm()
 	}
 	return left.BareWord() != nil && right.BareWord() != nil &&
@@ -214,7 +224,8 @@ func adjacentBareSearchTerms(left, right ISearchTermContext) bool {
 		left.GetStop().GetStop()+1 == right.GetStart().GetStart()
 }
 
-func hasUnsupportedSearchOperand(node antlr.Tree) bool {
+func hasUnsupportedSearchOperand(node antlr.Tree, budget *parseBudget) bool {
+	budget.step()
 	if search, ok := node.(ISearchCommandContext); ok && search.SEARCH() == nil && search.GetStart().GetTokenIndex() > 0 {
 		return false
 	}
@@ -225,7 +236,7 @@ func hasUnsupportedSearchOperand(node antlr.Tree) bool {
 		return false
 	}
 	for i := 0; i < node.GetChildCount(); i++ {
-		if hasUnsupportedSearchOperand(node.GetChild(i)) {
+		if hasUnsupportedSearchOperand(node.GetChild(i), budget) {
 			return true
 		}
 	}
@@ -235,8 +246,10 @@ func hasUnsupportedSearchOperand(node antlr.Tree) bool {
 // The grammar also accepts unknown pipeline commands as implicit searches.
 // Only the initial stage can be an implicit search; subsequent searches use
 // SEARCH. Do not turn an unknown command name or its arguments into keywords.
-func bareWordIsSearchPredicate(ctx IBareWordContext) bool {
+func bareWordIsSearchPredicate(ctx IBareWordContext, budget *parseBudget) bool {
+	budget.step()
 	for parent := ctx.GetParent(); parent != nil; parent = parent.GetParent() {
+		budget.step()
 		if search, ok := parent.(ISearchCommandContext); ok {
 			return search.SEARCH() != nil || search.GetStart().GetTokenIndex() == 0
 		}
@@ -245,6 +258,7 @@ func bareWordIsSearchPredicate(ctx IBareWordContext) bool {
 }
 
 func (b *splExpressionBuilder) whereExpression(ctx IExpressionContext) *ConditionExpression {
+	b.budget.step()
 	if ctx == nil {
 		return nil
 	}
@@ -252,6 +266,7 @@ func (b *splExpressionBuilder) whereExpression(ctx IExpressionContext) *Conditio
 }
 
 func (b *splExpressionBuilder) orExpression(ctx IOrExpressionContext) *ConditionExpression {
+	b.budget.step()
 	if ctx == nil {
 		return nil
 	}
@@ -274,6 +289,7 @@ func (b *splExpressionBuilder) orExpression(ctx IOrExpressionContext) *Condition
 }
 
 func (b *splExpressionBuilder) andExpression(ctx IAndExpressionContext) *ConditionExpression {
+	b.budget.step()
 	if ctx == nil {
 		return nil
 	}
@@ -285,6 +301,7 @@ func (b *splExpressionBuilder) andExpression(ctx IAndExpressionContext) *Conditi
 }
 
 func (b *splExpressionBuilder) notExpression(ctx INotExpressionContext) *ConditionExpression {
+	b.budget.step()
 	if ctx == nil {
 		return nil
 	}
@@ -295,6 +312,7 @@ func (b *splExpressionBuilder) notExpression(ctx INotExpressionContext) *Conditi
 }
 
 func (b *splExpressionBuilder) comparisonExpression(ctx IComparisonExpressionContext) *ConditionExpression {
+	b.budget.step()
 	if ctx == nil {
 		return nil
 	}
@@ -358,6 +376,7 @@ func containsExtractedFunctionCondition(node antlr.Tree) bool {
 }
 
 func (b *splExpressionBuilder) condition() *ConditionExpression {
+	b.budget.step()
 	if b.next >= len(b.conditions) {
 		return nil
 	}

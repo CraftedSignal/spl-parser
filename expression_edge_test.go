@@ -34,13 +34,13 @@ func TestSPLExpressionBuilderHelperEdges(t *testing.T) {
 	}
 	builder := &splExpressionBuilder{conditions: conditions}
 
-	if got := buildConditionExpression(nil, conditions); got != nil {
+	if got := buildConditionExpression(nil, conditions, nil); got != nil {
 		t.Fatalf("nil tree returned expression %#v", got)
 	}
-	if got := buildConditionExpression(splSearchExpressionForTest(t, `a=1 b=2`), conditions[:1]); got != nil {
+	if got := buildConditionExpression(splSearchExpressionForTest(t, `a=1 b=2`), conditions[:1], nil); got != nil {
 		t.Fatalf("single condition returned expression %#v", got)
 	}
-	if got := buildConditionExpression(splSearchExpressionForTest(t, `a=1 OR b=2`), conditions); got == nil || got.Operator != BooleanOr {
+	if got := buildConditionExpression(splSearchExpressionForTest(t, `a=1 OR b=2`), conditions, nil); got == nil || got.Operator != BooleanOr {
 		t.Fatalf("search-expression fallback did not preserve OR grouping, got %#v", got)
 	}
 	if got := builder.tree(nil); got != nil {
@@ -52,7 +52,7 @@ func TestSPLExpressionBuilderHelperEdges(t *testing.T) {
 	if got := builder.tree(splParserForTest(t, `inputlookup users WHERE a=1`).InputlookupCommand()); got == nil {
 		t.Fatalf("inputlookup command with WHERE expression returned nil")
 	}
-	if got := collectSPLSearchExpressions(nil); got != nil {
+	if got := collectSPLSearchExpressions(nil, nil); got != nil {
 		t.Fatalf("nil tree search-expression collection returned %#v", got)
 	}
 	if got := builder.searchTerm(nil); got != nil {
