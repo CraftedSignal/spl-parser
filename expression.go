@@ -23,15 +23,15 @@ type ConditionExpression struct {
 	Children       []*ConditionExpression `json:"children,omitempty"`
 }
 
-func buildConditionExpression(tree antlr.Tree, conditions []Condition) *ConditionExpression {
+func buildConditionExpression(tree antlr.Tree, conditions []Condition, budget *parseBudget) *ConditionExpression {
 	if tree == nil || len(conditions) < 2 {
 		return nil
 	}
-	if expression := buildPipelineConditionExpression(tree, conditions); expression != nil {
+	if expression := buildPipelineConditionExpression(tree, conditions, budget); expression != nil {
 		return expression
 	}
-	for _, candidate := range collectSPLSearchExpressions(tree) {
-		builder := &splExpressionBuilder{conditions: conditions}
+	for _, candidate := range collectSPLSearchExpressions(tree, budget) {
+		builder := &splExpressionBuilder{conditions: conditions, budget: budget}
 		expression := builder.searchExpression(candidate)
 		if expression != nil && builder.next == len(conditions) {
 			return expression
@@ -40,8 +40,8 @@ func buildConditionExpression(tree antlr.Tree, conditions []Condition) *Conditio
 	return nil
 }
 
-func buildPipelineConditionExpression(tree antlr.Tree, conditions []Condition) *ConditionExpression {
-	builder := &splExpressionBuilder{conditions: conditions}
+func buildPipelineConditionExpression(tree antlr.Tree, conditions []Condition, budget *parseBudget) *ConditionExpression {
+	builder := &splExpressionBuilder{conditions: conditions, budget: budget}
 	expression := builder.tree(tree)
 	if expression != nil && builder.next == len(conditions) {
 		return expression
@@ -50,11 +50,13 @@ func buildPipelineConditionExpression(tree antlr.Tree, conditions []Condition) *
 }
 
 type splExpressionBuilder struct {
+	budget     *parseBudget
 	conditions []Condition
 	next       int
 }
 
 func (b *splExpressionBuilder) tree(node antlr.Tree) *ConditionExpression {
+	b.budget.step()
 	if node == nil {
 		return nil
 	}
@@ -81,10 +83,11 @@ func (b *splExpressionBuilder) tree(node antlr.Tree) *ConditionExpression {
 	return expression
 }
 
-func collectSPLSearchExpressions(tree antlr.Tree) []ISearchExpressionContext {
+func collectSPLSearchExpressions(tree antlr.Tree, budget *parseBudget) []ISearchExpressionContext {
 	var expressions []ISearchExpressionContext
 	var visit func(antlr.Tree)
 	visit = func(node antlr.Tree) {
+		budget.step()
 		if node == nil {
 			return
 		}
@@ -100,6 +103,7 @@ func collectSPLSearchExpressions(tree antlr.Tree) []ISearchExpressionContext {
 }
 
 func (b *splExpressionBuilder) searchExpression(ctx ISearchExpressionContext) *ConditionExpression {
+	b.budget.step()
 	if ctx == nil {
 		// tstats and mstats without a where clause
 		return nil
@@ -127,6 +131,7 @@ func (b *splExpressionBuilder) searchExpression(ctx ISearchExpressionContext) *C
 }
 
 func (b *splExpressionBuilder) searchTerm(ctx ISearchTermContext) *ConditionExpression {
+	b.budget.step()
 	if ctx == nil {
 		return nil
 	}
@@ -143,6 +148,7 @@ func (b *splExpressionBuilder) searchTerm(ctx ISearchTermContext) *ConditionExpr
 }
 
 func (b *splExpressionBuilder) whereExpression(ctx IExpressionContext) *ConditionExpression {
+	b.budget.step()
 	if ctx == nil {
 		return nil
 	}
@@ -150,6 +156,7 @@ func (b *splExpressionBuilder) whereExpression(ctx IExpressionContext) *Conditio
 }
 
 func (b *splExpressionBuilder) orExpression(ctx IOrExpressionContext) *ConditionExpression {
+	b.budget.step()
 	if ctx == nil {
 		return nil
 	}
@@ -172,6 +179,7 @@ func (b *splExpressionBuilder) orExpression(ctx IOrExpressionContext) *Condition
 }
 
 func (b *splExpressionBuilder) andExpression(ctx IAndExpressionContext) *ConditionExpression {
+	b.budget.step()
 	if ctx == nil {
 		return nil
 	}
@@ -183,6 +191,7 @@ func (b *splExpressionBuilder) andExpression(ctx IAndExpressionContext) *Conditi
 }
 
 func (b *splExpressionBuilder) notExpression(ctx INotExpressionContext) *ConditionExpression {
+	b.budget.step()
 	if ctx == nil {
 		return nil
 	}
@@ -193,6 +202,7 @@ func (b *splExpressionBuilder) notExpression(ctx INotExpressionContext) *Conditi
 }
 
 func (b *splExpressionBuilder) comparisonExpression(ctx IComparisonExpressionContext) *ConditionExpression {
+	b.budget.step()
 	if ctx == nil {
 		return nil
 	}
@@ -256,6 +266,7 @@ func containsExtractedFunctionCondition(node antlr.Tree) bool {
 }
 
 func (b *splExpressionBuilder) condition() *ConditionExpression {
+	b.budget.step()
 	if b.next >= len(b.conditions) {
 		return nil
 	}

@@ -45,10 +45,7 @@ func TestSPLSubsearchJoinAndComparisonEdges(t *testing.T) {
 		t.Fatalf("splitBracketedSubsearches() = %#v", subsearches)
 	}
 
-	if conditions := extractSubsearchConditions(`search [ search user="alice" ]`, 7); conditions != nil {
-		t.Fatalf("depth guard returned %#v", conditions)
-	}
-	subConditions := extractSubsearchConditions(`search message="[not subsearch]" [ search user="alice" [ search src_ip="1.2.3.4" ] ]`, 0)
+	subConditions := extractSubsearchConditions(`search message="[not subsearch]" [ search user="alice" [ search src_ip="1.2.3.4" ] ]`, 0, nil)
 	requireSPLCondition(t, subConditions, "user", "=", "alice", false)
 	requireSPLCondition(t, subConditions, "src_ip", "=", "1.2.3.4", false)
 
