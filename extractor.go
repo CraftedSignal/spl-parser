@@ -32,16 +32,18 @@ type Condition struct {
 
 // ParseResult contains all conditions extracted from the query
 type ParseResult struct {
-	Conditions     []Condition          `json:"conditions"`
-	Expression     *ConditionExpression `json:"expression,omitempty"`
-	GroupByFields  []string             `json:"group_by_fields,omitempty"` // Fields from stats/eventstats/streamstats BY clauses
-	Aggregations   []Aggregation        `json:"aggregations,omitempty"`    // Aggregations computed by stats-like commands, in query order
-	ComputedFields map[string]string    `json:"computed_fields,omitempty"` // Map of computed field name -> source field (from eval/rex)
-	FieldAliases   map[string]string    `json:"field_aliases,omitempty"`   // Map of new name -> original name (from rename)
-	Commands       []string             `json:"commands,omitempty"`        // List of commands used in the query (stats, eventstats, etc.)
-	Joins          []JoinInfo           `json:"joins,omitempty"`           // Extracted join/append info
-	Subsearches    []*ParseResult       `json:"subsearches,omitempty"`     // Recursively parsed direct subsearches
-	Errors         []string             `json:"errors,omitempty"`
+	Conditions           []Condition          `json:"conditions"`
+	Expression           *ConditionExpression `json:"expression,omitempty"`
+	ExpressionIncomplete bool                 `json:"expression_incomplete,omitempty"`
+	Warnings             []string             `json:"warnings,omitempty"`
+	GroupByFields        []string             `json:"group_by_fields,omitempty"` // Fields from stats/eventstats/streamstats BY clauses
+	Aggregations         []Aggregation        `json:"aggregations,omitempty"`    // Aggregations computed by stats-like commands, in query order
+	ComputedFields       map[string]string    `json:"computed_fields,omitempty"` // Map of computed field name -> source field (from eval/rex)
+	FieldAliases         map[string]string    `json:"field_aliases,omitempty"`   // Map of new name -> original name (from rename)
+	Commands             []string             `json:"commands,omitempty"`        // List of commands used in the query (stats, eventstats, etc.)
+	Joins                []JoinInfo           `json:"joins,omitempty"`           // Extracted join/append info
+	Subsearches          []*ParseResult       `json:"subsearches,omitempty"`     // Recursively parsed direct subsearches
+	Errors               []string             `json:"errors,omitempty"`
 }
 
 // Aggregation is one stats-like aggregation and the column it outputs.
@@ -1624,17 +1626,25 @@ func extractConditionsInternal(query string) (result *ParseResult) {
 		allErrors = nil
 	}
 
+	incomplete := hasUnsupportedSearchOperand(tree)
+	var warnings []string
+	if incomplete {
+		expression = nil
+		warnings = append(warnings, "boolean expression unavailable: search contains an unsupported macro or subsearch operand")
+	}
 	return &ParseResult{
-		Conditions:     conditions,
-		Expression:     expression,
-		GroupByFields:  extractor.groupByFields,
-		Aggregations:   extractor.aggregations,
-		ComputedFields: extractor.computedFields,
-		FieldAliases:   extractor.fieldAliases,
-		Commands:       extractor.commands,
-		Joins:          extractor.joins,
-		Subsearches:    extractor.subsearches,
-		Errors:         allErrors,
+		ExpressionIncomplete: incomplete,
+		Warnings:             warnings,
+		Conditions:           conditions,
+		Expression:           expression,
+		GroupByFields:        extractor.groupByFields,
+		Aggregations:         extractor.aggregations,
+		ComputedFields:       extractor.computedFields,
+		FieldAliases:         extractor.fieldAliases,
+		Commands:             extractor.commands,
+		Joins:                extractor.joins,
+		Subsearches:          extractor.subsearches,
+		Errors:               allErrors,
 	}
 }
 
@@ -2579,21 +2589,31 @@ func (e *conditionExtractor) EnterBareWord(ctx *BareWordContext) {
 		return
 	}
 
-	value := ctx.GetText()
-	// Remove quotes
-	value = trimMatchingQuotes(value)
-
-	// Create a keyword condition (field="_raw" or "_keyword")
-	cond := Condition{
-		Field:     "_raw",
-		Operator:  "contains",
-		Value:     value,
-		Negated:   e.negated,
-		PipeStage: e.currentStage,
-		LogicalOp: e.lastLogicalOp,
+	// A direct NOT applies only to the first whitespace-delimited term,
+	// while negation inherited from a parenthesized group applies to every term.
+	directNot := false
+	for parent := ctx.GetParent(); parent != nil; parent = parent.GetParent() {
+		term, ok := parent.(ISearchTermContext)
+		if !ok {
+			break
+		}
+		if term.NOT() != nil {
+			directNot = !directNot
+		}
 	}
-	e.conditions = append(e.conditions, cond)
-	e.lastLogicalOp = "AND"
+	for i, value := range searchBareWordSpan(ctx) {
+		negated := e.negated
+		if i > 0 && directNot {
+			negated = !negated
+		}
+		cond := Condition{
+			Field: "_raw", Operator: "contains", Value: value,
+			Negated: negated, PipeStage: e.currentStage, LogicalOp: e.lastLogicalOp,
+		}
+		e.conditions = append(e.conditions, cond)
+		e.lastLogicalOp = "AND"
+	}
+
 }
 
 // EnterCondition extracts field conditions

@@ -1,6 +1,7 @@
 package spl
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -243,6 +244,98 @@ func TestSearchBooleanPrecedenceWildcardTruthTable(t *testing.T) {
 				if got, want := precedenceMatches(semantic.Expression, map[string]bool{"a": a, "b": b, "_raw": true}), tc.want(a, b); got != want {
 					t.Errorf("a=%t b=%t: got %t want %t", a, b, got, want)
 				}
+			}
+		})
+	}
+}
+
+func TestSearchBareWordSpans(t *testing.T) {
+	for _, tc := range []struct {
+		query, want string
+		values      []string
+	}{
+		{`a=1 AND key* OR b=2`, "and(a,or(_raw,b))", []string{"key*"}},
+		{`a=1 AND *key* OR b=2`, "and(a,or(_raw,b))", []string{"*key*"}},
+		{`a=1 AND foo.bar* OR b=2`, "and(a,or(_raw,b))", []string{"foo.bar*"}},
+		{`a=1 AND "/var/log/*" OR b=2`, "and(a,or(_raw,b))", []string{"/var/log/*"}},
+		{`a=1 AND /var/log/* OR b=2`, "and(a,or(_raw,b))", []string{"/var/log/*"}},
+		{`a=1 AND key * OR b=2`, "and(a,_raw,or(_raw,b))", []string{"key", "*"}},
+		{`a=1 AND key AND * OR b=2`, "and(a,_raw,or(_raw,b))", []string{"key", "*"}},
+		{`a=1 AND NOT key* OR b=2`, "and(a,or(!_raw,b))", []string{"key*"}},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			result := ExtractConditions(tc.query)
+			if len(result.Errors) > 0 {
+				t.Fatalf("errors: %v", result.Errors)
+			}
+			if got := precedenceParseShape(result.Expression, result.Conditions); got != tc.want {
+				t.Fatalf("tree = %s, want %s; conditions %#v", got, tc.want, result.Conditions)
+			}
+			var values []string
+			for _, condition := range result.Conditions {
+				if condition.Field == "_raw" {
+					values = append(values, condition.Value)
+				}
+			}
+			if strings.Join(values, "|") != strings.Join(tc.values, "|") {
+				t.Fatalf("bare term values = %#v, want %#v", values, tc.values)
+			}
+			if got := precedenceSemanticShape(AnalyzeQuery(tc.query).Expression); got != tc.want {
+				t.Fatalf("semantic tree = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestUnsupportedSearchOperandDoesNotInventExpression(t *testing.T) {
+	for _, query := range []string{"a=1 AND `macro` OR b=2", `a=1 AND [ search c=3 ] OR b=2`} {
+		t.Run(query, func(t *testing.T) {
+			result := ExtractConditions(query)
+			if result.Expression != nil {
+				t.Fatalf("unsupported operand produced tree %s", precedenceParseShape(result.Expression, result.Conditions))
+			}
+			if precedenceWarningCount(t, result) == 0 {
+				t.Fatal("missing incomplete-expression diagnostic")
+			}
+			semantic := AnalyzeQuery(query)
+			if semantic.Expression != nil {
+				t.Fatalf("unsupported operand produced semantic tree %s", precedenceSemanticShape(semantic.Expression))
+			}
+			if precedenceWarningCount(t, semantic) == 0 {
+				t.Fatal("missing semantic incomplete-expression diagnostic")
+			}
+		})
+	}
+}
+
+func precedenceWarningCount(t *testing.T, result any) int {
+	t.Helper()
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	return len(decoded.Warnings)
+}
+
+func TestSearchBareWordWhitespace(t *testing.T) {
+	for _, tc := range []struct{ query, want string }{
+		{`a=1 AND * key OR b=2`, "and(a,_raw,or(_raw,b))"},
+		{`a=1 AND NOT * key OR b=2`, "and(a,!_raw,or(_raw,b))"},
+		{`NOT (a=1 AND * key OR b=2)`, "or(!a,!_raw,and(!_raw,!b))"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			result := ExtractConditions(tc.query)
+			if got := precedenceParseShape(result.Expression, result.Conditions); got != tc.want {
+				t.Fatalf("tree = %s, want %s; conditions %#v", got, tc.want, result.Conditions)
+			}
+			if len(result.Conditions) != 4 || result.Conditions[1].Value != "*" || result.Conditions[2].Value != "key" {
+				t.Fatalf("conditions %#v", result.Conditions)
 			}
 		})
 	}

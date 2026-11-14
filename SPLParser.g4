@@ -479,6 +479,7 @@ bareWord
     : IDENTIFIER
     | NUMBER
     | QUOTED_STRING
+    | REST_PATH      // Unquoted fulltext path/glob, e.g. /var/log/*
     | wildcardValue  // Allows bare * or *value patterns as search terms
     ;
 

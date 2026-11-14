@@ -117,37 +117,119 @@ func (b *splExpressionBuilder) searchExpression(ctx ISearchExpressionContext) *C
 				operator = BooleanOr
 			}
 		case ISearchTermContext:
-			next := b.searchTerm(node)
-			if next == nil {
+			for _, next := range b.searchTermExpressions(node) {
+				if operator == BooleanOr {
+					orGroup = combineConditionExpressions(BooleanOr, orGroup, next)
+				} else {
+					expression = combineConditionExpressions(BooleanAnd, expression, orGroup)
+					orGroup = next
+				}
 				operator = BooleanAnd
-				continue
 			}
-			if operator == BooleanOr {
-				orGroup = combineConditionExpressions(BooleanOr, orGroup, next)
-			} else {
-				expression = combineConditionExpressions(BooleanAnd, expression, orGroup)
-				orGroup = next
-			}
-			operator = BooleanAnd
 		}
 	}
 	return combineConditionExpressions(BooleanAnd, expression, orGroup)
 }
 
 func (b *splExpressionBuilder) searchTerm(ctx ISearchTermContext) *ConditionExpression {
+	var expression *ConditionExpression
+	for _, part := range b.searchTermExpressions(ctx) {
+		expression = combineConditionExpressions(BooleanAnd, expression, part)
+	}
+	return expression
+}
+
+func (b *splExpressionBuilder) searchTermExpressions(ctx ISearchTermContext) []*ConditionExpression {
 	if ctx == nil {
 		return nil
 	}
 	if ctx.NOT() != nil {
-		return demorganConditionExpression(b.searchTerm(ctx.SearchTerm()))
+		parts := b.searchTermExpressions(ctx.SearchTerm())
+		if len(parts) > 0 {
+			parts[0] = demorganConditionExpression(parts[0])
+		}
+		return parts
 	}
 	if nested := ctx.SearchExpression(); nested != nil {
-		return b.searchExpression(nested)
+		return []*ConditionExpression{b.searchExpression(nested)}
 	}
-	if ctx.Condition() != nil || (ctx.BareWord() != nil && bareWordIsSearchPredicate(ctx.BareWord())) {
-		return b.condition()
+	if ctx.Condition() != nil {
+		return []*ConditionExpression{b.condition()}
+	}
+	if bare := ctx.BareWord(); bare != nil && bareWordIsSearchPredicate(bare) {
+		var parts []*ConditionExpression
+		for range searchBareWordSpan(bare) {
+			parts = append(parts, b.condition())
+		}
+		return parts
 	}
 	return nil
+}
+
+// searchBareWordSpan joins only physically adjacent unquoted bare-word pieces.
+// The grammar can parse key* as two terms, whereas key * is an implicit AND.
+// Extraction and expression construction must consume the same single leaf.
+func searchBareWordSpan(ctx IBareWordContext) []string {
+	value := ctx.GetStart().GetInputStream().GetText(ctx.GetStart().GetStart(), ctx.GetStop().GetStop())
+	if ctx.QUOTED_STRING() != nil {
+		return []string{trimMatchingQuotes(value)}
+	}
+	term, ok := ctx.GetParent().(ISearchTermContext)
+	if !ok {
+		return strings.Fields(value)
+	}
+	for {
+		parent, nested := term.GetParent().(ISearchTermContext)
+		if !nested {
+			break
+		}
+		term = parent
+	}
+	expression, ok := term.GetParent().(ISearchExpressionContext)
+	if !ok {
+		return strings.Fields(value)
+	}
+	terms := expression.AllSearchTerm()
+	for i, candidate := range terms {
+		if candidate != term {
+			continue
+		}
+		if i > 0 && adjacentBareSearchTerms(terms[i-1], candidate) {
+			return nil
+		}
+		for j := i + 1; j < len(terms) && adjacentBareSearchTerms(terms[j-1], terms[j]); j++ {
+			value = ctx.GetStart().GetInputStream().GetText(ctx.GetStart().GetStart(), terms[j].GetStop().GetStop())
+		}
+		break
+	}
+	return strings.Fields(value)
+}
+
+func adjacentBareSearchTerms(left, right ISearchTermContext) bool {
+	for left.NOT() != nil {
+		left = left.SearchTerm()
+	}
+	return left.BareWord() != nil && right.BareWord() != nil &&
+		left.BareWord().QUOTED_STRING() == nil && right.BareWord().QUOTED_STRING() == nil &&
+		left.GetStop().GetStop()+1 == right.GetStart().GetStart()
+}
+
+func hasUnsupportedSearchOperand(node antlr.Tree) bool {
+	if search, ok := node.(ISearchCommandContext); ok && search.SEARCH() == nil && search.GetStart().GetTokenIndex() > 0 {
+		return false
+	}
+	if term, ok := node.(ISearchTermContext); ok && (term.MACRO() != nil || term.Subsearch() != nil) {
+		return true
+	}
+	if _, subsearch := node.(ISubsearchContext); subsearch {
+		return false
+	}
+	for i := 0; i < node.GetChildCount(); i++ {
+		if hasUnsupportedSearchOperand(node.GetChild(i)) {
+			return true
+		}
+	}
+	return false
 }
 
 // The grammar also accepts unknown pipeline commands as implicit searches.
