@@ -1,7 +1,9 @@
 package spl
 
 import (
+	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -13,6 +15,50 @@ func branches(op BooleanOperator, children ...*ConditionExpression) *ConditionEx
 	return &ConditionExpression{Operator: op, Children: children}
 }
 
+func projectionMatches(t *testing.T, expr *ConditionExpression, conditions []Condition, fields map[string]string) bool {
+	t.Helper()
+	if expr == nil {
+		t.Fatal("missing expression")
+	}
+	switch expr.Operator {
+	case BooleanCondition:
+		if expr.ConditionIndex < 0 || expr.ConditionIndex >= len(conditions) {
+			t.Fatalf("invalid condition index %d", expr.ConditionIndex)
+		}
+		condition := conditions[expr.ConditionIndex]
+		if condition.Operator != "=" && condition.Operator != "in" {
+			t.Fatalf("unsupported test operator %q", condition.Operator)
+		}
+		values := condition.Alternatives
+		if len(values) == 0 {
+			values = []string{condition.Value}
+		}
+		for _, value := range values {
+			if fields[condition.Field] == value {
+				return !condition.Negated
+			}
+		}
+		return condition.Negated
+	case BooleanAnd:
+		for _, child := range expr.Children {
+			if !projectionMatches(t, child, conditions, fields) {
+				return false
+			}
+		}
+		return true
+	case BooleanOr:
+		for _, child := range expr.Children {
+			if projectionMatches(t, child, conditions, fields) {
+				return true
+			}
+		}
+		return false
+	default:
+		t.Fatalf("unsupported test expression %q", expr.Operator)
+		return false
+	}
+}
+
 func requireProjection(t *testing.T, query string, want []Condition, expression *ConditionExpression) {
 	t.Helper()
 	got := ExtractConditions(query)
@@ -21,13 +67,39 @@ func requireProjection(t *testing.T, query string, want []Condition, expression 
 	}
 }
 
+func requireSemanticAndLeaves(t *testing.T, query string, want []Condition, leafFields ...string) {
+	t.Helper()
+	semantic := AnalyzeQuery(query)
+	if len(semantic.Errors) != 0 || !reflect.DeepEqual(semantic.Conditions, want) || semantic.Expression == nil {
+		t.Fatalf("AnalyzeQuery(%q) = %#v; want conditions %#v", query, semantic, want)
+	}
+	if len(leafFields) == 1 {
+		if semantic.Expression.Operator != BooleanCondition || semantic.Expression.Condition == nil ||
+			semantic.Expression.Condition.Field != leafFields[0] {
+			t.Fatalf("AnalyzeQuery(%q) expression = %#v", query, semantic.Expression)
+		}
+		return
+	}
+	if semantic.Expression.Operator != BooleanAnd || len(semantic.Expression.Children) != len(leafFields) {
+		t.Fatalf("AnalyzeQuery(%q) expression = %#v", query, semantic.Expression)
+	}
+	for i, field := range leafFields {
+		child := semantic.Expression.Children[i]
+		if child.Operator != BooleanCondition || child.Condition == nil || child.Condition.Field != field {
+			t.Fatalf("AnalyzeQuery(%q) leaf %d = %#v, want %q", query, i, child, field)
+		}
+	}
+}
+
 func TestResourceAppendRetainsDistinctMembershipAndExpression(t *testing.T) {
 	first := Condition{Field: "x", Operator: "in", Value: "a", Alternatives: []string{"a", "b"}, LogicalOp: "AND"}
 	second := Condition{Field: "x", Operator: "in", Value: "a", Alternatives: []string{"a", "c"}, LogicalOp: "AND", PipeStage: 1}
 	query := `search x IN ("a","b") | where x IN ("a","c")`
 	requireProjection(t, query, []Condition{first, second}, branches(BooleanAnd, leaf(0), leaf(1)))
+	requireSemanticAndLeaves(t, query, []Condition{first, second}, "x", "x")
 	resource := Condition{Field: "_spl.outputlookup", Operator: "=", Value: "results.csv", PipeStage: 2, LogicalOp: "AND"}
 	requireProjection(t, query+` | outputlookup results.csv`, []Condition{first, second, resource}, branches(BooleanAnd, leaf(0), leaf(1)))
+	requireSemanticAndLeaves(t, query+` | outputlookup results.csv`, []Condition{first, second, resource}, "x", "x")
 }
 
 func TestResourceAppendRetainsComputedFilter(t *testing.T) {
@@ -37,31 +109,28 @@ func TestResourceAppendRetainsComputedFilter(t *testing.T) {
 		got.Conditions[2].Field != "_spl.outputlookup" || !reflect.DeepEqual(got.Expression, branches(BooleanAnd, leaf(0), leaf(1))) {
 		t.Fatalf("computed filter/resource projection: conditions %#v expression %#v errors %v", got.Conditions, got.Expression, got.Errors)
 	}
+	requireSemanticAndLeaves(t, query, got.Conditions, "x", "x")
 }
 
 func TestResourceAppendRetainsSameStageMembershipIntersection(t *testing.T) {
-	query := `search x IN ("a","b") AND x IN ("a","c") | outputlookup results.csv`
+	baseQuery := `search x IN ("a","b") AND x IN ("a","c")`
+	query := baseQuery + ` | outputlookup results.csv`
 	want := []Condition{
 		{Field: "x", Operator: "in", Value: "a", Alternatives: []string{"a", "b"}, LogicalOp: "AND"},
 		{Field: "x", Operator: "in", Value: "a", Alternatives: []string{"a", "c"}, LogicalOp: "AND"},
 		{Field: "_spl.outputlookup", Operator: "=", Value: "results.csv", PipeStage: 1, LogicalOp: "AND"},
 	}
+	requireProjection(t, baseQuery, want[:2], branches(BooleanAnd, leaf(0), leaf(1)))
+	requireSemanticAndLeaves(t, baseQuery, want[:2], "x", "x")
 	requireProjection(t, query, want, branches(BooleanAnd, leaf(0), leaf(1)))
-	semantic := AnalyzeQuery(query)
-	if len(semantic.Errors) != 0 || len(semantic.Conditions) != 3 || semantic.Expression == nil ||
-		semantic.Expression.Operator != BooleanAnd || len(semantic.Expression.Children) != 2 ||
-		semantic.Expression.Children[0].Condition == nil || semantic.Expression.Children[1].Condition == nil ||
-		semantic.Expression.Children[1].Condition.Field != "x" {
-		t.Fatalf("semantic resource append = %#v", semantic)
-	}
+	requireSemanticAndLeaves(t, query, want, "x", "x")
 	for _, row := range []struct {
 		x    string
 		want bool
 	}{{"a", true}, {"b", false}, {"c", false}, {"other", false}} {
-		inFirst := row.x == "a" || row.x == "b"
-		inSecond := row.x == "a" || row.x == "c"
-		if got := inFirst && inSecond; got != row.want {
-			t.Fatalf("membership intersection x=%s = %v, want %v", row.x, got, row.want)
+		got := ExtractConditions(query)
+		if matched := projectionMatches(t, got.Expression, got.Conditions, map[string]string{"x": row.x}); matched != row.want {
+			t.Fatalf("membership intersection x=%s = %v, want %v", row.x, matched, row.want)
 		}
 	}
 }
@@ -73,6 +142,21 @@ func TestResourceAppendRemapsExactDuplicate(t *testing.T) {
 		{Field: "_spl.outputlookup", Operator: "=", Value: "results.csv", PipeStage: 1, LogicalOp: "AND"},
 	}
 	requireProjection(t, query, want, leaf(0))
+	requireSemanticAndLeaves(t, query, want, "x")
+}
+
+func TestSemanticResourceMetadataExcludedFromFallback(t *testing.T) {
+	semantic := AnalyzeQuery(`search x=a | outputlookup results.csv`)
+	if len(semantic.Errors) != 0 || len(semantic.Conditions) != 2 || semantic.Expression == nil ||
+		semantic.Expression.Operator != BooleanCondition || semantic.Expression.Condition == nil ||
+		semantic.Expression.Condition.Field != "x" {
+		t.Fatalf("semantic single-filter resource projection = %#v", semantic)
+	}
+	resourceOnly := AnalyzeQuery(`| outputlookup results.csv`)
+	if len(resourceOnly.Errors) != 0 || len(resourceOnly.Conditions) != 1 || resourceOnly.Expression != nil ||
+		resourceOnly.Conditions[0].Field != "_spl.outputlookup" {
+		t.Fatalf("semantic resource-only projection = %#v", resourceOnly)
+	}
 }
 
 func TestConditionDedupStructuralIdentityAndIndexMap(t *testing.T) {
@@ -111,5 +195,148 @@ func TestConditionDedupAlternativesEncodingIsInjective(t *testing.T) {
 	got, indexMap := deduplicateConditionsWithIndexMap(inputs, nil)
 	if len(got) != 4 || !reflect.DeepEqual(indexMap, []int{0, 1, 2, 3, 0}) {
 		t.Fatalf("encoded alternatives = %#v map %v", got, indexMap)
+	}
+}
+
+func TestAsymmetricOrGroupsKeepAtomicPredicates(t *testing.T) {
+	for _, tc := range []struct {
+		query   string
+		want    *ConditionExpression
+		matches func(a, x string) bool
+	}{
+		{`search x=u OR (x=v AND a=yes)`, branches(BooleanOr, leaf(0), branches(BooleanAnd, leaf(1), leaf(2))),
+			func(a, x string) bool { return x == "u" || (x == "v" && a == "yes") }},
+		{`search (a=yes AND x=u) OR x=v`, branches(BooleanOr, branches(BooleanAnd, leaf(0), leaf(1)), leaf(2)),
+			func(a, x string) bool { return (a == "yes" && x == "u") || x == "v" }},
+	} {
+		got := ExtractConditions(tc.query)
+		if len(got.Errors) != 0 || len(got.Conditions) != 3 || !reflect.DeepEqual(got.Expression, tc.want) {
+			t.Fatalf("asymmetric %q = conditions %#v expression %#v errors %v, want %#v", tc.query, got.Conditions, got.Expression, got.Errors, tc.want)
+		}
+		for _, condition := range got.Conditions {
+			if len(condition.Alternatives) != 0 {
+				t.Fatalf("asymmetric %q merged %#v", tc.query, got.Conditions)
+			}
+		}
+		for _, a := range []string{"yes", "no"} {
+			for _, x := range []string{"u", "v", "other"} {
+				if matched := projectionMatches(t, got.Expression, got.Conditions, map[string]string{"a": a, "x": x}); matched != tc.matches(a, x) {
+					t.Fatalf("%q row a=%s x=%s = %v", tc.query, a, x, matched)
+				}
+			}
+		}
+	}
+}
+
+func TestProvenSiblingOrGrouping(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		count int
+		want  *ConditionExpression
+	}{
+		{`search x=u OR x=v`, 1, leaf(0)},
+		{`search a=yes AND (x=u OR x=v)`, 2, branches(BooleanAnd, leaf(0), leaf(1))},
+		{`search index=main AND (x=u OR x=v)`, 2, branches(BooleanAnd, leaf(0), leaf(1))},
+	} {
+		got := ExtractConditions(tc.query)
+		if len(got.Errors) != 0 || len(got.Conditions) != tc.count || !reflect.DeepEqual(got.Expression, tc.want) {
+			t.Fatalf("sibling %q = conditions %#v expression %#v errors %v, want %#v", tc.query, got.Conditions, got.Expression, got.Errors, tc.want)
+		}
+		last := got.Conditions[len(got.Conditions)-1]
+		if !reflect.DeepEqual(last.Alternatives, []string{"u", "v"}) {
+			t.Fatalf("sibling %q alternatives %#v", tc.query, last.Alternatives)
+		}
+	}
+}
+
+func TestCaseDistinctFieldsDoNotGroup(t *testing.T) {
+	got := ExtractConditions(`search User=a OR user=b`)
+	if len(got.Errors) != 0 || len(got.Conditions) != 2 || !reflect.DeepEqual(got.Expression, branches(BooleanOr, leaf(0), leaf(1))) ||
+		got.Conditions[0].Field != "User" || got.Conditions[1].Field != "user" {
+		t.Fatalf("case-distinct fields = conditions %#v expression %#v errors %v", got.Conditions, got.Expression, got.Errors)
+	}
+}
+
+func TestUnsupportedSearchOperandBlocksAlternativeProjection(t *testing.T) {
+	got := ExtractConditions("search x=u OR `unknown` OR x=v")
+	if !got.ExpressionIncomplete || got.Expression != nil || len(got.Conditions) != 2 ||
+		len(got.Conditions[0].Alternatives) != 0 || len(got.Conditions[1].Alternatives) != 0 {
+		t.Fatalf("unsupported operand was crossed by grouping: %#v", got)
+	}
+}
+
+func TestOrGroupingRequiresMatchingLiteralContext(t *testing.T) {
+	base := Condition{Field: "x", Operator: "=", Value: "u", LogicalOp: "AND"}
+	for _, tc := range []struct {
+		name string
+		next Condition
+	}{
+		{"case", Condition{Field: "X", Operator: "=", Value: "v"}},
+		{"stage", Condition{Field: "x", Operator: "=", Value: "v", PipeStage: 1}},
+		{"reference", Condition{Field: "x", Operator: "=", Value: "v", ValueReference: "other"}},
+		{"computed", Condition{Field: "x", Operator: "=", Value: "v", IsComputed: true}},
+		{"source", Condition{Field: "x", Operator: "=", Value: "v", SourceField: "raw"}},
+		{"negated", Condition{Field: "x", Operator: "=", Value: "v", Negated: true}},
+		{"operator", Condition{Field: "x", Operator: "!=", Value: "v"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conditions := []Condition{base, tc.next}
+			got, indexMap := groupORConditionsByExpression(conditions, branches(BooleanOr, leaf(0), leaf(1)), nil)
+			if !reflect.DeepEqual(got, conditions) || !reflect.DeepEqual(indexMap, []int{0, 1}) {
+				t.Fatalf("grouped incompatible conditions: %#v map %v", got, indexMap)
+			}
+		})
+	}
+	if got, indexMap := groupORConditionsByExpression([]Condition{base, {Field: "x", Operator: "=", Value: "v"}}, nil, nil); len(got) != 2 || !reflect.DeepEqual(indexMap, []int{0, 1}) {
+		t.Fatalf("missing proof grouped conditions: %#v map %v", got, indexMap)
+	}
+}
+
+func TestPostprocessingOwnsAlternativeSlices(t *testing.T) {
+	original := []Condition{
+		{Field: "x", Operator: "=", Value: "a", Alternatives: []string{"a"}},
+		{Field: "x", Operator: "=", Value: "b", Alternatives: []string{"b"}},
+	}
+	grouped, indexMap := groupORConditionsByExpression(original, branches(BooleanOr, leaf(0), leaf(1)), nil)
+	if len(grouped) != 1 || !reflect.DeepEqual(indexMap, []int{0, 0}) {
+		t.Fatalf("grouped = %#v map %v", grouped, indexMap)
+	}
+	grouped[0].Alternatives[0] = "changed"
+	if original[0].Alternatives[0] != "a" {
+		t.Fatalf("grouping aliased caller alternatives: %#v", original)
+	}
+	deduped, _ := deduplicateConditionsWithIndexMap(original, nil)
+	deduped[0].Alternatives[0] = "changed"
+	if original[0].Alternatives[0] != "a" {
+		t.Fatalf("dedup aliased caller alternatives: %#v", original)
+	}
+}
+
+func TestPostprocessingUsesSharedWorkBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*parseBudget)
+	}{
+		{"dedup", func(b *parseBudget) {
+			deduplicateConditionsWithIndexMap([]Condition{{Field: "x", Alternatives: []string{"a", "b"}}}, b)
+		}},
+		{"group", func(b *parseBudget) {
+			groupORConditionsByExpression([]Condition{{Field: "x", Value: "a"}, {Field: "x", Value: "b"}}, branches(BooleanOr, leaf(0), leaf(1)), b)
+		}},
+		{"remap", func(b *parseBudget) { remapConditionExpression(branches(BooleanAnd, leaf(0), leaf(1)), []int{0, 1}, b) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			limits := defaultParseLimits()
+			limits.maxWork = 1
+			budget, cancel := newParseBudget(context.Background(), limits)
+			defer cancel()
+			defer func() {
+				abort, ok := recover().(budgetAbort)
+				if !ok || !strings.Contains(abort.err.Error(), "work budget") {
+					t.Fatalf("postprocessing escaped shared work budget: %#v", abort)
+				}
+			}()
+			tc.run(budget)
+		})
 	}
 }

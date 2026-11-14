@@ -1,6 +1,9 @@
 package spl
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // SemanticQuery is the parser-owned semantic view of an SPL query.
 // It resolves ANTLR/listener output into stable condition-bearing nodes so
@@ -132,6 +135,9 @@ func semanticExpressionFromConditions(conditions []Condition, budget *parseBudge
 	var expression *SemanticExpression
 	for index := range conditions {
 		budget.step()
+		if strings.HasPrefix(conditions[index].Field, "_spl.") {
+			continue
+		}
 		budget.reserveOutput(1)
 		leaf := &SemanticExpression{Operator: BooleanCondition, Condition: &conditions[index]}
 		if expression == nil {

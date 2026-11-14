@@ -1725,20 +1725,31 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	allErrors := append(lexerErrors.errors, parserErrors.errors...)
 	allErrors = append(allErrors, extractor.errors...)
 
-	// Post-process to group OR conditions on same field
-	rawConditions := append([]Condition(nil), extractor.conditions...)
-	conditions, conditionIndexMap := groupORConditionsWithIndexMap(extractor.conditions)
-	expression := remapConditionExpression(buildConditionExpression(tree, rawConditions, budget), conditionIndexMap)
+	// The raw tree proves which OR operands are atomic siblings. A flat
+	// LogicalOp sequence cannot distinguish a sibling from an AND subtree.
+	rawConditions := make([]Condition, 0, len(extractor.conditions))
+	for _, condition := range extractor.conditions {
+		budget.step()
+		condition.Alternatives = cloneConditionAlternatives(condition.Alternatives, budget)
+		rawConditions = append(rawConditions, condition)
+	}
+	incomplete := hasUnsupportedSearchOperand(tree, budget)
+	var rawExpression *ConditionExpression
+	if !incomplete {
+		rawExpression = buildConditionExpression(tree, rawConditions, budget)
+	}
+	conditions, conditionIndexMap := groupORConditionsByExpression(rawConditions, rawExpression, budget)
+	expression := remapConditionExpression(rawExpression, conditionIndexMap, budget)
 	recoveredWithPortableExtraction := false
 	if len(allErrors) > 0 {
 		if portableConditions := extractPortableSPLConditions(query, budget); len(portableConditions) > 0 {
-			conditions = groupORConditions(portableConditions)
+			conditions = portableConditions
 			expression = nil
 			recoveredWithPortableExtraction = true
 		}
 	} else if len(conditions) == 0 {
 		if portableConditions := extractPortableSPLConditions(query, budget); len(portableConditions) > 0 {
-			conditions = groupORConditions(portableConditions)
+			conditions = portableConditions
 			expression = nil
 		}
 	}
@@ -1747,8 +1758,17 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 			expression = nil
 			recoveredWithPortableExtraction = len(allErrors) > 0
 		}
+		combined := make([]Condition, 0, len(conditions)+len(resourceConditions))
+		for _, condition := range conditions {
+			budget.step()
+			combined = append(combined, condition)
+		}
+		for _, condition := range resourceConditions {
+			budget.step()
+			combined = append(combined, condition)
+		}
 		var indexMap []int
-		conditions, indexMap = deduplicateConditionsWithIndexMap(append(conditions, resourceConditions...), budget)
+		conditions, indexMap = deduplicateConditionsWithIndexMap(combined, budget)
 		expression = remapConditionExpression(expression, indexMap, budget)
 	}
 	if recoveredWithPortableExtraction {
@@ -1758,7 +1778,6 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	budget.outputSize(len(conditions))
 	budget.check()
 
-	incomplete := hasUnsupportedSearchOperand(tree, budget)
 	var warnings []string
 	if incomplete {
 		expression = nil
@@ -2970,80 +2989,72 @@ func extractValueList(ctx IValueListContext) []string {
 	return values
 }
 
-// groupORConditions groups consecutive OR conditions on the same field
-func groupORConditions(conditions []Condition) []Condition {
-	grouped, _ := groupORConditionsWithIndexMap(conditions)
-	return grouped
-}
-
-func groupORConditionsWithIndexMap(conditions []Condition) ([]Condition, []int) {
-	if len(conditions) == 0 {
-		return conditions, nil
+// groupORConditionsByExpression groups only direct atomic siblings of an OR
+// node. The index map always refers to the original raw condition indexes.
+func groupORConditionsByExpression(conditions []Condition, expression *ConditionExpression, budget *parseBudget) ([]Condition, []int) {
+	groupStart := make([]int, len(conditions))
+	for i := range groupStart {
+		budget.step()
+		groupStart[i] = i
 	}
+	var visit func(*ConditionExpression)
+	visit = func(node *ConditionExpression) {
+		budget.step()
+		if node == nil {
+			return
+		}
+		if node.Operator == BooleanOr {
+			start, previous := -1, -1
+			for _, child := range node.Children {
+				budget.step()
+				if child == nil || child.Operator != BooleanCondition || child.ConditionIndex < 0 || child.ConditionIndex >= len(conditions) {
+					start, previous = -1, -1
+					continue
+				}
+				index := child.ConditionIndex
+				if start >= 0 && index == previous+1 && sameConditionGroup(conditions[start], conditions[index]) {
+					groupStart[index] = start
+				} else {
+					start = index
+				}
+				previous = index
+			}
+		}
+		for _, child := range node.Children {
+			budget.step()
+			visit(child)
+		}
+	}
+	visit(expression)
 
 	result := make([]Condition, 0, len(conditions))
 	indexMap := make([]int, len(conditions))
-	for i := range indexMap {
-		indexMap[i] = -1
-	}
-
-	for i := 0; i < len(conditions); i++ {
-		cond := conditions[i]
-
-		// Look ahead for OR conditions on the same field
-		if i+1 < len(conditions) && conditions[i+1].LogicalOp == "OR" && sameConditionGroup(cond, conditions[i+1]) && canStartAlternativeGroup(conditions, i) {
-			alternatives := conditionAlternatives(cond)
-
-			j := i + 1
-			for j < len(conditions) {
-				next := conditions[j]
-				if next.LogicalOp == "OR" && sameConditionGroup(cond, next) {
-					alternatives = append(alternatives, conditionAlternatives(next)...)
-					j++
-				} else {
-					break
-				}
+	for i, condition := range conditions {
+		budget.step()
+		if start := groupStart[i]; start != i {
+			merged := &result[indexMap[start]]
+			alternatives := conditionAlternatives(*merged, budget)
+			for _, value := range conditionAlternatives(condition, budget) {
+				budget.step()
+				alternatives = append(alternatives, value)
 			}
-
-			if len(alternatives) > 1 {
-				cond.Alternatives = deduplicateConditionValues(alternatives)
-				groupedIndex := len(result)
-				result = append(result, cond)
-				for rawIndex := i; rawIndex < j; rawIndex++ {
-					indexMap[rawIndex] = groupedIndex
-				}
-				i = j - 1 // skip the grouped conditions
-				continue
-			}
+			merged.Alternatives = deduplicateConditionValues(alternatives, budget)
+			indexMap[i] = indexMap[start]
+			continue
 		}
-
 		indexMap[i] = len(result)
-		result = append(result, cond)
+		condition.Alternatives = cloneConditionAlternatives(condition.Alternatives, budget)
+		result = append(result, condition)
 	}
-
 	return result, indexMap
 }
 
-func canStartAlternativeGroup(conditions []Condition, index int) bool {
-	if index == 0 || strings.EqualFold(conditions[index].LogicalOp, "OR") {
-		return true
-	}
-	for i := 0; i < index; i++ {
-		if !IsSearchScopeMetadata(conditions[i].Field) {
-			return false
-		}
-	}
-	return true
-}
-
 func sameConditionGroup(a, b Condition) bool {
-	if a.Negated || b.Negated {
+	if a.Negated || b.Negated || a.IsComputed || b.IsComputed ||
+		a.ValueReference != "" || b.ValueReference != "" || a.Field == "" || a.Operator == "" {
 		return false
 	}
-	if !strings.EqualFold(a.Field, b.Field) ||
-		!strings.EqualFold(a.Operator, b.Operator) ||
-		a.IsComputed != b.IsComputed ||
-		!strings.EqualFold(a.SourceField, b.SourceField) {
+	if a.Field != b.Field || a.Operator != b.Operator || a.PipeStage != b.PipeStage || a.SourceField != b.SourceField {
 		return false
 	}
 	if strings.EqualFold(a.Operator, "like") {
@@ -3068,17 +3079,19 @@ func likePatternKind(pattern string) string {
 	}
 }
 
-func conditionAlternatives(cond Condition) []string {
+func conditionAlternatives(cond Condition, budget *parseBudget) []string {
 	if len(cond.Alternatives) > 0 {
-		return append([]string(nil), cond.Alternatives...)
+		return cloneConditionAlternatives(cond.Alternatives, budget)
 	}
+	budget.step()
 	return []string{cond.Value}
 }
 
-func deduplicateConditionValues(values []string) []string {
+func deduplicateConditionValues(values []string, budget *parseBudget) []string {
 	seen := make(map[string]bool, len(values))
 	result := make([]string, 0, len(values))
 	for _, value := range values {
+		budget.step()
 		if !seen[value] {
 			seen[value] = true
 			result = append(result, value)
