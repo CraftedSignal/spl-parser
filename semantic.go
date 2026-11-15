@@ -26,6 +26,7 @@ type SemanticQuery struct {
 type SemanticExpression struct {
 	Operator  BooleanOperator       `json:"operator"`
 	Condition *Condition            `json:"condition,omitempty"`
+	Scalar    *ScalarPredicate      `json:"scalar,omitempty"`
 	Children  []*SemanticExpression `json:"children,omitempty"`
 }
 
@@ -98,14 +99,22 @@ func semanticExpressionFromParseExpression(expression *ConditionExpression, cond
 	}
 
 	switch expression.Operator {
+	case BooleanScalar:
+		if expression.Scalar == nil {
+			return nil
+		}
+		budget.reserveOutput(1)
+		scalar := *expression.Scalar
+		return &SemanticExpression{Operator: BooleanScalar, Scalar: &scalar}
 	case BooleanCondition:
 		if expression.ConditionIndex < 0 || expression.ConditionIndex >= len(conditions) {
 			return nil
 		}
 		budget.reserveOutput(1)
+		condition := cloneSemanticCondition(conditions[expression.ConditionIndex], budget)
 		return &SemanticExpression{
 			Operator:  BooleanCondition,
-			Condition: &conditions[expression.ConditionIndex],
+			Condition: &condition,
 		}
 	case BooleanAnd, BooleanOr:
 		budget.reserveOutput(1 + len(expression.Children))
@@ -139,7 +148,8 @@ func semanticExpressionFromConditions(conditions []Condition, budget *parseBudge
 			continue
 		}
 		budget.reserveOutput(1)
-		leaf := &SemanticExpression{Operator: BooleanCondition, Condition: &conditions[index]}
+		condition := cloneSemanticCondition(conditions[index], budget)
+		leaf := &SemanticExpression{Operator: BooleanCondition, Condition: &condition}
 		if expression == nil {
 			expression = leaf
 			continue
@@ -227,10 +237,16 @@ func cloneSemanticConditions(conditions []Condition, budget *parseBudget) []Cond
 	out := make([]Condition, len(conditions))
 	for i, condition := range conditions {
 		budget.step()
-		out[i] = condition
-		out[i].Alternatives = cloneSemanticStrings(condition.Alternatives, budget)
+		out[i] = cloneSemanticCondition(condition, budget)
 	}
 	return out
+}
+
+func cloneSemanticCondition(condition Condition, budget *parseBudget) Condition {
+	condition.Alternatives = cloneSemanticStrings(condition.Alternatives, budget)
+	condition.LHS = cloneOperand(condition.LHS, budget)
+	condition.RHS = cloneOperand(condition.RHS, budget)
+	return condition
 }
 
 func cloneSemanticStrings(values []string, budget *parseBudget) []string {

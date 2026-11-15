@@ -237,7 +237,7 @@ func (b *parseBudget) enterInterpretation(text string) func() {
 func (b *parseBudget) appendConditions(dst []Condition, values ...Condition) []Condition {
 	for _, condition := range values {
 		b.step()
-		b.reserveOutput(1 + len(condition.Alternatives))
+		b.reserveOutput(1 + len(condition.Alternatives) + operandNodeCount(condition.LHS, b) + operandNodeCount(condition.RHS, b))
 	}
 	return append(dst, values...)
 }

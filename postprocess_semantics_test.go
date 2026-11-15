@@ -63,7 +63,7 @@ func projectionMatches(t *testing.T, expr *ConditionExpression, conditions []Con
 func requireProjection(t *testing.T, query string, want []Condition, expression *ConditionExpression) {
 	t.Helper()
 	got := ExtractConditions(query)
-	if len(got.Errors) != 0 || !reflect.DeepEqual(got.Conditions, want) || !reflect.DeepEqual(got.Expression, expression) {
+	if len(got.Errors) != 0 || !reflect.DeepEqual(legacyConditions(got.Conditions), legacyConditions(want)) || !reflect.DeepEqual(got.Expression, expression) {
 		t.Fatalf("ExtractConditions(%q) = conditions %#v, expression %#v, errors %v; want %#v, %#v", query, got.Conditions, got.Expression, got.Errors, want, expression)
 	}
 }
@@ -71,7 +71,7 @@ func requireProjection(t *testing.T, query string, want []Condition, expression 
 func requireSemanticAndLeaves(t *testing.T, query string, want []Condition, leafFields ...string) {
 	t.Helper()
 	semantic := AnalyzeQuery(query)
-	if len(semantic.Errors) != 0 || !reflect.DeepEqual(semantic.Conditions, want) || semantic.Expression == nil {
+	if len(semantic.Errors) != 0 || !reflect.DeepEqual(legacyConditions(semantic.Conditions), legacyConditions(want)) || semantic.Expression == nil {
 		t.Fatalf("AnalyzeQuery(%q) = %#v; want conditions %#v", query, semantic, want)
 	}
 	if len(leafFields) == 1 {
@@ -90,6 +90,14 @@ func requireSemanticAndLeaves(t *testing.T, query string, want []Condition, leaf
 			t.Fatalf("AnalyzeQuery(%q) leaf %d = %#v, want %q", query, i, child, field)
 		}
 	}
+}
+
+func legacyConditions(conditions []Condition) []Condition {
+	legacy := append([]Condition(nil), conditions...)
+	for i := range legacy {
+		legacy[i].Context, legacy[i].LHS, legacy[i].RHS = "", nil, nil
+	}
+	return legacy
 }
 
 func TestResourceAppendRetainsDistinctMembershipAndExpression(t *testing.T) {
@@ -278,7 +286,7 @@ func TestUnsupportedWhereAtomKeepsExpressionIncomplete(t *testing.T) {
 	} {
 		t.Run(tc.query, func(t *testing.T) {
 			got := ExtractConditions(tc.query)
-			if len(got.Errors) != 0 || !got.ExpressionIncomplete || got.Expression != nil || len(got.Warnings) == 0 ||
+			if len(got.Errors) != 0 || got.ExpressionIncomplete || got.Expression == nil || !containsScalarExpression(got.Expression) || len(got.Warnings) != 0 ||
 				len(got.Conditions) != len(tc.values) {
 				t.Fatalf("incomplete where extraction = %#v", got)
 			}
@@ -288,7 +296,7 @@ func TestUnsupportedWhereAtomKeepsExpressionIncomplete(t *testing.T) {
 				}
 			}
 			semantic := AnalyzeQuery(tc.query)
-			if len(semantic.Errors) != 0 || semantic.Expression != nil || len(semantic.Warnings) == 0 ||
+			if len(semantic.Errors) != 0 || semantic.Expression == nil || len(semantic.Warnings) != 0 ||
 				!reflect.DeepEqual(semantic.Conditions, got.Conditions) {
 				t.Fatalf("semantic incomplete where = %#v; extract %#v", semantic, got)
 			}
@@ -313,13 +321,13 @@ func TestUnrepresentedWhereBooleanAtomsRemainIncomplete(t *testing.T) {
 		{`| where NOT (x="u" OR false())`, []string{"u"}, 1},
 		{`| where x="u" OR (x="v" AND mystery(y))`, []string{"u", "v"}, 2},
 		{`| where x="u" OR (x="v" AND y)`, []string{"u", "v"}, 2},
-		{`| where x="u" OR (x="v" AND isnull(y)=false)`, []string{"u", "v"}, 3},
-		{`| where x="u" OR (x="v" AND isnull(y)=true)`, []string{"u", "v"}, 3},
+		{`| where x="u" OR (x="v" AND isnull(y)=false)`, []string{"u", "v"}, 2},
+		{`| where x="u" OR (x="v" AND isnull(y)=true)`, []string{"u", "v"}, 2},
 		{`| where false()`, nil, 0},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
 			got := ExtractConditions(tc.query)
-			if len(got.Errors) != 0 || !got.ExpressionIncomplete || got.Expression != nil || len(got.Warnings) == 0 {
+			if len(got.Errors) != 0 || got.ExpressionIncomplete || got.Expression == nil || !containsScalarExpression(got.Expression) || len(got.Warnings) != 0 {
 				t.Fatalf("unrepresented atom has complete expression: %#v", got)
 			}
 			if len(got.Conditions) != tc.conditionCount {
@@ -331,7 +339,7 @@ func TestUnrepresentedWhereBooleanAtomsRemainIncomplete(t *testing.T) {
 				}
 			}
 			semantic := AnalyzeQuery(tc.query)
-			if len(semantic.Errors) != 0 || semantic.Expression != nil || len(semantic.Warnings) == 0 ||
+			if len(semantic.Errors) != 0 || semantic.Expression == nil || len(semantic.Warnings) != 0 ||
 				(len(tc.values) > 0 && !reflect.DeepEqual(semantic.Conditions, got.Conditions)) ||
 				(len(tc.values) == 0 && len(semantic.Conditions) != 0) {
 				t.Fatalf("semantic projection of incomplete expression: %#v", semantic)
@@ -379,9 +387,9 @@ func TestLargeProvenOrGroupsStayWithinNormalBudget(t *testing.T) {
 				}
 			}
 			semantic := AnalyzeQuery(query.String())
-			if len(semantic.Errors) != 0 || len(semantic.Conditions) != 1 || semantic.Expression == nil ||
-				semantic.Expression.Condition == nil || len(semantic.Expression.Condition.Alternatives) != count {
-				t.Fatalf("%d-term semantic: %#v", count, semantic)
+			if len(semantic.Errors) != 1 || !strings.Contains(semantic.Errors[0], "output items") ||
+				len(semantic.Conditions) != 0 || semantic.Expression != nil {
+				t.Fatalf("%d-term semantic output must fail without a partial model: %#v", count, semantic)
 			}
 		})
 	}

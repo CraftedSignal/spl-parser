@@ -103,7 +103,7 @@ func TestAnalyzeContextRejectsCanceledRequest(t *testing.T) {
 
 func TestAnalyzeSharesBudgetWithSemanticConversion(t *testing.T) {
 	limits := defaultParseLimits()
-	limits.maxOutputItems = 1
+	limits.maxOutputItems = 3 // Condition plus its two typed operands.
 	query := "x=1"
 	if result := extractConditionsContext(context.Background(), query, limits); len(result.Errors) != 0 || len(result.Conditions) != 1 {
 		t.Fatalf("extraction must fit this budget: %+v", result)
