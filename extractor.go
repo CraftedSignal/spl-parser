@@ -2736,28 +2736,22 @@ func (e *conditionExtractor) EnterBareWord(ctx *BareWordContext) {
 			directNot = !directNot
 		}
 	}
-	values, stop := searchBareWordSpanWithEnd(ctx, e.budget)
-	for i, value := range values {
+	parts := searchBareWordParts(ctx, e.budget)
+	for i, part := range parts {
 		negated := e.negated
 		if i > 0 && directNot {
 			negated = !negated
 		}
 		cond := Condition{
-			Field: "_raw", Context: PredicateSearch, LHS: &Operand{Kind: OperandField, Value: "_raw"}, Operator: "contains", Value: value,
+			Field: "_raw", Context: PredicateSearch, LHS: &Operand{Kind: OperandField, Value: "_raw"}, Operator: "contains", Value: part.value,
 			Negated: negated, PipeStage: e.currentStage, LogicalOp: e.lastLogicalOp,
 		}
 		kind := OperandBare
-		source := e.sourceOf(ctx)
+		source := e.sourceMap.source(part.start, part.stop)
 		if ctx.QUOTED_STRING() != nil {
 			kind = OperandString
-		} else {
-			start := ctx.GetStart().GetStart()
-			e.budget.step()
-			if len(values) == 1 && stop >= start {
-				source = e.sourceMap.source(start, stop)
-			}
 		}
-		cond.RHS = &Operand{Kind: kind, Source: source, Value: value}
+		cond.RHS = &Operand{Kind: kind, Source: source, Value: part.value}
 		e.appendSourcedCondition(cond, ctx)
 		e.lastLogicalOp = "AND"
 	}

@@ -127,3 +127,48 @@ func TestReviewSearchBareOperandSourceCoversWildcard(t *testing.T) {
 		}
 	}
 }
+
+func TestReviewMergedBareSearchPartsHaveOwnSource(t *testing.T) {
+	for _, tc := range []struct {
+		query   string
+		values  []string
+		sources []string
+		negated []bool
+	}{
+		{`search foo* bar*`, []string{"foo*", "bar*"}, []string{"foo*", "bar*"}, []bool{false, false}},
+		{`search NOT foo* bar*`, []string{"foo*", "bar*"}, []string{"foo*", "bar*"}, []bool{true, false}},
+		{`search foo* foo*`, []string{"foo*", "foo*"}, []string{"foo*", "foo*"}, []bool{false, false}},
+		{"search foo*\u00a0bar*", []string{"foo*", "bar*"}, []string{"foo*", "bar*"}, []bool{false, false}},
+		{"search ```é``` foo* bar*", []string{"foo*", "bar*"}, []string{"foo*", "bar*"}, []bool{false, false}},
+		{"search foo* ```note``` bar*", []string{"foo*", "bar*"}, []string{"foo*", "bar*"}, []bool{false, false}},
+	} {
+		parsed := ExtractConditions(tc.query)
+		semantic := AnalyzeQuery(tc.query)
+		if len(parsed.Errors) != 0 || len(parsed.Warnings) != 0 || parsed.ExpressionIncomplete ||
+			len(semantic.Errors) != 0 || len(semantic.Warnings) != 0 || len(parsed.Conditions) != len(tc.values) ||
+			len(semantic.Conditions) != len(tc.values) {
+			t.Errorf("merged search terms %q: parsed=%#v semantic=%#v", tc.query, parsed, semantic)
+			continue
+		}
+		for i := range tc.values {
+			for _, condition := range []Condition{parsed.Conditions[i], semantic.Conditions[i]} {
+				if condition.Value != tc.values[i] || condition.RHS == nil || condition.RHS.Source != tc.sources[i] ||
+					condition.Negated != tc.negated[i] {
+					t.Errorf("merged source %q at %d: %#v", tc.query, i, condition)
+				}
+			}
+		}
+	}
+	parsed := ExtractConditions(`search foo* OR bar*`)
+	semantic := AnalyzeQuery(`search foo* OR bar*`)
+	if len(parsed.Errors) != 0 || len(parsed.Warnings) != 0 || parsed.ExpressionIncomplete ||
+		len(parsed.Conditions) != 1 || len(semantic.Conditions) != 1 {
+		t.Fatalf("explicit OR search: parsed=%#v semantic=%#v", parsed, semantic)
+	}
+	for _, condition := range []Condition{parsed.Conditions[0], semantic.Conditions[0]} {
+		if condition.RHS == nil || condition.RHS.Kind != OperandList || len(condition.RHS.Items) != 2 ||
+			condition.RHS.Items[0].Source != "foo*" || condition.RHS.Items[1].Source != "bar*" {
+			t.Errorf("explicit OR search sources: %#v", condition)
+		}
+	}
+}

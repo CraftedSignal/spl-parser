@@ -2,6 +2,7 @@ package spl
 
 import (
 	"strings"
+	"unicode"
 
 	"github.com/antlr4-go/antlr/v4"
 )
@@ -233,20 +234,52 @@ func (b *splExpressionBuilder) searchTermExpressions(ctx ISearchTermContext) []*
 // The grammar can parse key* as two terms, whereas key * is an implicit AND.
 // Extraction and expression construction must consume the same single leaf.
 func searchBareWordSpan(ctx IBareWordContext, budget *parseBudget) []string {
-	values, _ := searchBareWordSpanWithEnd(ctx, budget)
+	parts := searchBareWordParts(ctx, budget)
+	values := make([]string, len(parts))
+	for i := range parts {
+		budget.step()
+		values[i] = parts[i].value
+	}
 	return values
 }
 
-func searchBareWordSpanWithEnd(ctx IBareWordContext, budget *parseBudget) ([]string, int) {
+type bareSearchPart struct {
+	value       string
+	start, stop int
+}
+
+func splitBareSearchParts(value string, start int, budget *parseBudget) []bareSearchPart {
+	runes := []rune(value)
+	var parts []bareSearchPart
+	partStart := -1
+	for i, character := range runes {
+		budget.step()
+		if unicode.IsSpace(character) {
+			if partStart >= 0 {
+				parts = append(parts, bareSearchPart{string(runes[partStart:i]), start + partStart, start + i - 1})
+				partStart = -1
+			}
+		} else if partStart < 0 {
+			partStart = i
+		}
+	}
+	if partStart >= 0 {
+		parts = append(parts, bareSearchPart{string(runes[partStart:]), start + partStart, start + len(runes) - 1})
+	}
+	return parts
+}
+
+func searchBareWordParts(ctx IBareWordContext, budget *parseBudget) []bareSearchPart {
 	budget.step()
+	start := ctx.GetStart().GetStart()
 	stop := ctx.GetStop().GetStop()
-	value := ctx.GetStart().GetInputStream().GetText(ctx.GetStart().GetStart(), stop)
+	value := ctx.GetStart().GetInputStream().GetText(start, stop)
 	if ctx.QUOTED_STRING() != nil {
-		return []string{trimMatchingQuotes(value)}, stop
+		return []bareSearchPart{{trimMatchingQuotes(value), start, stop}}
 	}
 	term, ok := ctx.GetParent().(ISearchTermContext)
 	if !ok {
-		return strings.Fields(value), stop
+		return splitBareSearchParts(value, start, budget)
 	}
 	for {
 		budget.step()
@@ -258,14 +291,14 @@ func searchBareWordSpanWithEnd(ctx IBareWordContext, budget *parseBudget) ([]str
 	}
 	expression, ok := term.GetParent().(ISearchExpressionContext)
 	if !ok {
-		return strings.Fields(value), stop
+		return splitBareSearchParts(value, start, budget)
 	}
 	terms := expression.AllSearchTerm()
 	// A whole positive, unquoted search * stage adds no event predicate.
 	// Keep wildcard operands inside Boolean expressions and negated terms.
 	if len(terms) == 1 && value == "*" && term.NOT() == nil {
 		if _, standalone := expression.GetParent().(ISearchCommandContext); standalone {
-			return nil, stop
+			return nil
 		}
 	}
 	for i, candidate := range terms {
@@ -274,15 +307,15 @@ func searchBareWordSpanWithEnd(ctx IBareWordContext, budget *parseBudget) ([]str
 			continue
 		}
 		if i > 0 && adjacentBareSearchTerms(terms[i-1], candidate, budget) {
-			return nil, stop
+			return nil
 		}
 		for j := i + 1; j < len(terms) && adjacentBareSearchTerms(terms[j-1], terms[j], budget); j++ {
 			stop = terms[j].GetStop().GetStop()
-			value = ctx.GetStart().GetInputStream().GetText(ctx.GetStart().GetStart(), stop)
+			value = ctx.GetStart().GetInputStream().GetText(start, stop)
 		}
 		break
 	}
-	return strings.Fields(value), stop
+	return splitBareSearchParts(value, start, budget)
 }
 
 func adjacentBareSearchTerms(left, right ISearchTermContext, budget *parseBudget) bool {
