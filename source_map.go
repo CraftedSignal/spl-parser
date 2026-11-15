@@ -49,18 +49,18 @@ func mapSPLBacktickComments(query string, spans []sourceRuneSpan, budget *parseB
 		budget.step()
 		if !inString && i+2 < len(runes) && runes[i] == '`' && runes[i+1] == '`' && runes[i+2] == '`' {
 			start := i
-			i += 3
-			closed := false
-			for i+2 < len(runes) {
+			closeAt := -1
+			for j := i + 3; j+2 < len(runes); j++ {
 				budget.step()
-				if runes[i] == '`' && runes[i+1] == '`' && runes[i+2] == '`' {
-					i += 3
-					closed = true
+				if runes[j] == '`' && runes[j+1] == '`' && runes[j+2] == '`' {
+					closeAt = j
 					break
 				}
-				i++
 			}
-			if !closed {
+			if closeAt >= 0 {
+				i = closeAt + 3
+			} else {
+				i = start + 3
 				for i < len(runes) && runes[i] != '\n' && runes[i] != '\r' {
 					budget.step()
 					i++
@@ -94,6 +94,29 @@ func (m splSourceMap) source(start, stop int) string {
 		return ""
 	}
 	from, through := m.spans[start].start, m.spans[stop].end
+	if from < 0 || through < from || through > len(m.original) {
+		return ""
+	}
+	return m.original[from:through]
+}
+
+// stageSource retains the authored bytes between structural pipeline pipes,
+// including whitespace and comments omitted by token-boundary source lookup.
+// A negative boundary denotes the beginning or end of the selected query.
+func (m splSourceMap) stageSource(previousPipe, nextPipe int) string {
+	from, through := 0, len(m.original)
+	if previousPipe >= 0 {
+		if previousPipe >= len(m.spans) {
+			return ""
+		}
+		from = m.spans[previousPipe].end
+	}
+	if nextPipe >= 0 {
+		if nextPipe >= len(m.spans) {
+			return ""
+		}
+		through = m.spans[nextPipe].start
+	}
 	if from < 0 || through < from || through > len(m.original) {
 		return ""
 	}

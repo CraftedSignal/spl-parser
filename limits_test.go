@@ -103,14 +103,92 @@ func TestAnalyzeContextRejectsCanceledRequest(t *testing.T) {
 
 func TestAnalyzeSharesBudgetWithSemanticConversion(t *testing.T) {
 	limits := defaultParseLimits()
-	limits.maxOutputItems = 3 // Condition plus its two typed operands.
+	limits.maxOutputItems = 3 // The mandatory graph cannot fit this tiny limit.
 	query := "x=1"
-	if result := extractConditionsContext(context.Background(), query, limits); len(result.Errors) != 0 || len(result.Conditions) != 1 {
-		t.Fatalf("extraction must fit this budget: %+v", result)
+	if result := extractConditionsContext(context.Background(), query, limits); len(result.Errors) != 1 || len(result.Conditions) != 0 || result.Dataflow != nil || !strings.Contains(result.Errors[0], "output items") {
+		t.Fatalf("extraction must fail without partial graph: %+v", result)
 	}
 	result := analyzeQueryContext(context.Background(), query, limits)
-	if len(result.Conditions) != 0 || result.Expression != nil || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], "output items") {
-		t.Fatalf("semantic conversion must share the exhausted budget without partial output: %+v", result)
+	if len(result.Conditions) != 0 || result.Expression != nil || result.Dataflow != nil || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], "output items") {
+		t.Fatalf("semantic entry must fail without partial output: %+v", result)
+	}
+
+	// A legacy extraction with exactly one condition and two typed operands
+	// isolates semantic conversion's use of the same cumulative budget. Even a
+	// fresh six-item budget cannot fit its fallback expression, so the exact
+	// fresh-six success control suggested by review is not feasible.
+	limits.maxOutputItems = 6
+	legacy := &ParseResult{Conditions: []Condition{{Field: "x", LHS: &Operand{Kind: OperandField, Value: "x"}, RHS: &Operand{Kind: OperandNumber, Value: "1"}}}}
+	budget, cancel := newParseBudget(context.Background(), limits)
+	defer cancel()
+	budget.reserveOutput(3)
+	var converted *SemanticQuery
+	var failure error
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				failure = parseFailure(recovered)
+				converted = nil
+			}
+		}()
+		converted = semanticFromExtraction(legacy, budget)
+	}()
+	if converted != nil || failure == nil || !strings.Contains(failure.Error(), "output items") {
+		t.Fatalf("semantic conversion escaped shared output budget: model=%#v failure=%v", converted, failure)
+	}
+}
+
+func TestDataflowStageAndRecursiveCloneBudgetsFailOnly(t *testing.T) {
+	for _, query := range []string{
+		`search index=main | eval y=x,z=y | where z="a"`,
+		`search index=main | table user | where user="a"`,
+		`search index=main | stats count by user | where count>1`,
+		`search index=main | join key [ search index=other | eval child=x ] | where x="a"`,
+	} {
+		limits := defaultParseLimits()
+		baselineBudget, baselineCancel := newParseBudget(context.Background(), limits)
+		baseline := extractConditionsInternal(query, baselineBudget)
+		charged := baselineBudget.output
+		baselineCancel()
+		if len(baseline.Errors) != 0 || baseline.Dataflow == nil || charged < 2 {
+			t.Fatalf("baseline did not reach graph boundary: %q: %#v charged=%d", query, baseline, charged)
+		}
+		limits.maxOutputItems = charged - 1
+		limited := extractConditionsContext(context.Background(), query, limits)
+		if len(limited.Errors) != 1 || !strings.Contains(limited.Errors[0], "output items") ||
+			limited.Dataflow != nil || len(limited.Conditions) != 0 || limited.Expression != nil {
+			t.Fatalf("one-short graph budget published partial model: %q charged=%d result=%#v", query, charged, limited)
+		}
+	}
+
+	parsed := ExtractConditions(`search index=main | join key [ search index=other | eval child=x ] | where x="a"`)
+	if parsed.Dataflow == nil || len(parsed.Joins) != 1 || parsed.Joins[0].Subsearch == nil {
+		t.Fatalf("recursive clone fixture failed: %#v", parsed)
+	}
+	limits := defaultParseLimits()
+	baselineBudget, baselineCancel := newParseBudget(context.Background(), limits)
+	converted := semanticFromExtraction(parsed, baselineBudget)
+	charged := baselineBudget.output
+	baselineCancel()
+	if converted == nil || converted.Dataflow == nil || len(converted.Joins) != 1 || converted.Joins[0].Subquery == nil || charged < 2 {
+		t.Fatalf("recursive clone baseline incomplete: %#v charged=%d", converted, charged)
+	}
+	limits.maxOutputItems = charged - 1
+	limitedBudget, limitedCancel := newParseBudget(context.Background(), limits)
+	defer limitedCancel()
+	var partial *SemanticQuery
+	var failure error
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				failure = parseFailure(recovered)
+				partial = nil
+			}
+		}()
+		partial = semanticFromExtraction(parsed, limitedBudget)
+	}()
+	if partial != nil || failure == nil || !strings.Contains(failure.Error(), "output items") {
+		t.Fatalf("recursive clone escaped one-short budget: result=%#v charged=%d failure=%v", partial, charged, failure)
 	}
 }
 

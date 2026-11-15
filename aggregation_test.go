@@ -65,6 +65,10 @@ func TestExtractConditions_StatsAggregations(t *testing.T) {
 			result := ExtractConditions(tt.query)
 			got := make([]Aggregation, len(result.Aggregations))
 			for i, aggregation := range result.Aggregations {
+				if aggregation.StageID != "" && aggregation.BindingID == "" {
+					t.Fatalf("aggregation has stage without binding: %+v", aggregation)
+				}
+				aggregation.StageID, aggregation.BindingID = "", ""
 				aggregation.PipeStage = 0
 				got[i] = aggregation
 			}

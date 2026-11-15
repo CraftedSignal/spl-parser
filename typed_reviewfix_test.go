@@ -32,7 +32,8 @@ func TestReviewResourceKeepsScalarExpression(t *testing.T) {
 	} {
 		r := ExtractConditions(tc.query)
 		semantic := AnalyzeQuery(tc.query)
-		if len(r.Errors) != 0 || len(r.Warnings) != 0 || r.ExpressionIncomplete ||
+		if len(r.Errors) != 0 || (tc.resource == "_spl.inputlookup" && (len(r.Warnings) != 1 || !strings.HasPrefix(r.Warnings[0], "dataflow:unsupported_stage_dataflow:"))) ||
+			(tc.resource != "_spl.inputlookup" && len(r.Warnings) != 0) || r.ExpressionIncomplete ||
 			len(r.Conditions) != 1 || r.Conditions[0].Field != tc.resource ||
 			!reviewScalar(r.Expression, "5<10", tc.negated) || semantic.Expression == nil {
 			t.Errorf("resource scalar %q: %#v", tc.query, r)

@@ -9,16 +9,19 @@ import (
 // It resolves ANTLR/listener output into stable condition-bearing nodes so
 // callers do not need to understand parse-tree details or condition indexes.
 type SemanticQuery struct {
-	Conditions     []Condition         `json:"conditions,omitempty"`
-	Expression     *SemanticExpression `json:"expression,omitempty"`
-	GroupByFields  []string            `json:"group_by_fields,omitempty"`
-	ComputedFields map[string]string   `json:"computed_fields,omitempty"`
-	FieldAliases   map[string]string   `json:"field_aliases,omitempty"`
-	Commands       []string            `json:"commands,omitempty"`
-	Joins          []SemanticJoin      `json:"joins,omitempty"`
-	Subsearches    []*SemanticQuery    `json:"subsearches,omitempty"`
-	Errors         []string            `json:"errors,omitempty"`
-	Warnings       []string            `json:"warnings,omitempty"`
+	Dataflow             *QueryDataflow      `json:"dataflow,omitempty"`
+	Aggregations         []Aggregation       `json:"aggregations,omitempty"`
+	ExpressionIncomplete bool                `json:"expression_incomplete,omitempty"`
+	Conditions           []Condition         `json:"conditions,omitempty"`
+	Expression           *SemanticExpression `json:"expression,omitempty"`
+	GroupByFields        []string            `json:"group_by_fields,omitempty"`
+	ComputedFields       map[string]string   `json:"computed_fields,omitempty"`
+	FieldAliases         map[string]string   `json:"field_aliases,omitempty"`
+	Commands             []string            `json:"commands,omitempty"`
+	Joins                []SemanticJoin      `json:"joins,omitempty"`
+	Subsearches          []*SemanticQuery    `json:"subsearches,omitempty"`
+	Errors               []string            `json:"errors,omitempty"`
+	Warnings             []string            `json:"warnings,omitempty"`
 }
 
 // SemanticExpression preserves boolean grouping while pointing directly at
@@ -75,13 +78,16 @@ func semanticFromExtraction(result *ParseResult, budget *parseBudget) *SemanticQ
 
 	budget.reserveOutput(1)
 	semantic := &SemanticQuery{
-		Conditions:     cloneSemanticConditions(result.Conditions, budget),
-		GroupByFields:  cloneSemanticStrings(result.GroupByFields, budget),
-		ComputedFields: cloneSemanticStringMap(result.ComputedFields, budget),
-		FieldAliases:   cloneSemanticStringMap(result.FieldAliases, budget),
-		Commands:       cloneSemanticStrings(result.Commands, budget),
-		Errors:         cloneSemanticStrings(result.Errors, budget),
-		Warnings:       cloneSemanticStrings(result.Warnings, budget),
+		Dataflow:             cloneQueryDataflow(result.Dataflow, budget),
+		Aggregations:         cloneSemanticAggregations(result.Aggregations, budget),
+		ExpressionIncomplete: result.ExpressionIncomplete,
+		Conditions:           cloneSemanticConditions(result.Conditions, budget),
+		GroupByFields:        cloneSemanticStrings(result.GroupByFields, budget),
+		ComputedFields:       cloneSemanticStringMap(result.ComputedFields, budget),
+		FieldAliases:         cloneSemanticStringMap(result.FieldAliases, budget),
+		Commands:             cloneSemanticStrings(result.Commands, budget),
+		Errors:               cloneSemanticStrings(result.Errors, budget),
+		Warnings:             cloneSemanticStrings(result.Warnings, budget),
 	}
 	if len(result.Errors) == 0 {
 		semantic.Expression = semanticExpressionFromParseExpression(result.Expression, semantic.Conditions, budget)
@@ -220,12 +226,10 @@ func semanticSubsearchesFromParseResults(subsearches []*ParseResult, budget *par
 		return nil
 	}
 	budget.reserveOutput(len(subsearches))
-	out := make([]*SemanticQuery, 0, len(subsearches))
-	for _, subsearch := range subsearches {
+	out := make([]*SemanticQuery, len(subsearches))
+	for i, subsearch := range subsearches {
 		budget.step()
-		if semantic := semanticFromExtraction(subsearch, budget); semantic != nil {
-			out = append(out, semantic)
-		}
+		out[i] = semanticFromExtraction(subsearch, budget)
 	}
 	return out
 }
@@ -246,9 +250,18 @@ func cloneSemanticConditions(conditions []Condition, budget *parseBudget) []Cond
 
 func cloneSemanticCondition(condition Condition, budget *parseBudget) Condition {
 	condition.Alternatives = cloneSemanticStrings(condition.Alternatives, budget)
+	condition.FieldBinding = cloneFieldBindingRef(condition.FieldBinding, budget)
 	condition.LHS = cloneOperand(condition.LHS, budget)
 	condition.RHS = cloneOperand(condition.RHS, budget)
 	return condition
+}
+
+func cloneSemanticAggregations(values []Aggregation, budget *parseBudget) []Aggregation {
+	if len(values) == 0 {
+		return nil
+	}
+	budget.reserveOutput(len(values))
+	return append([]Aggregation(nil), values...)
 }
 
 func cloneSemanticStrings(values []string, budget *parseBudget) []string {

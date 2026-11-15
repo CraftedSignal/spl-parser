@@ -21,6 +21,7 @@ func operandIdentity(operand *Operand, budget *parseBudget) string {
 	appendIdentityPart(&builder, string(operand.Kind))
 	appendIdentityPart(&builder, operand.Value)
 	appendIdentityPart(&builder, operand.Source)
+	appendIdentityPart(&builder, effectiveFieldBindingIdentity(operand.FieldBinding, operand.pendingFieldBinding))
 	for i := range operand.Items {
 		budget.step()
 		appendIdentityPart(&builder, operandIdentity(&operand.Items[i], budget))
@@ -34,6 +35,7 @@ func cloneOperand(operand *Operand, budget *parseBudget) *Operand {
 	}
 	budget.reserveOutput(1)
 	copy := *operand
+	copy.FieldBinding = cloneFieldBindingRef(operand.FieldBinding, budget)
 	if operand.Items != nil {
 		copy.Items = make([]Operand, len(operand.Items))
 		for i := range operand.Items {
