@@ -83,9 +83,11 @@ func semanticFromExtraction(result *ParseResult, budget *parseBudget) *SemanticQ
 		Errors:         cloneSemanticStrings(result.Errors, budget),
 		Warnings:       cloneSemanticStrings(result.Warnings, budget),
 	}
-	semantic.Expression = semanticExpressionFromParseExpression(result.Expression, semantic.Conditions, budget)
-	if semantic.Expression == nil && !result.ExpressionIncomplete {
-		semantic.Expression = semanticExpressionFromConditions(semantic.Conditions, budget)
+	if len(result.Errors) == 0 {
+		semantic.Expression = semanticExpressionFromParseExpression(result.Expression, semantic.Conditions, budget)
+		if semantic.Expression == nil && !result.ExpressionIncomplete {
+			semantic.Expression = semanticExpressionFromConditions(semantic.Conditions, budget)
+		}
 	}
 	semantic.Joins = semanticJoinsFromParseJoins(result.Joins, budget)
 	semantic.Subsearches = semanticSubsearchesFromParseResults(result.Subsearches, budget)

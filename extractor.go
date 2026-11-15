@@ -198,8 +198,9 @@ type conditionExtractor struct {
 // errorListener collects parse errors
 type errorListener struct {
 	*antlr.DefaultErrorListener
-	errors []string
-	budget *parseBudget
+	errors                        []string
+	budget                        *parseBudget
+	truncatedNativeWherePredicate bool
 }
 
 func (l *errorListener) SyntaxError(recognizer antlr.Recognizer, offendingSymbol interface{}, line, column int, msg string, e antlr.RecognitionException) {
@@ -213,6 +214,42 @@ func (l *errorListener) SyntaxError(recognizer antlr.Recognizer, offendingSymbol
 		}
 	}
 	l.errors = append(l.errors, msg)
+	if parser, ok := recognizer.(*antlr.BaseParser); ok && nativeWhereBoundaryError(parser, offendingSymbol, l.budget) {
+		l.truncatedNativeWherePredicate = true
+	}
+}
+
+// nativeWhereBoundaryError uses the existing parser's rule stack and offending
+// token to distinguish a missing where operand/group from portable syntax.
+func nativeWhereBoundaryError(parser *antlr.BaseParser, offendingSymbol interface{}, budget *parseBudget) bool {
+	token, ok := offendingSymbol.(antlr.Token)
+	if !ok {
+		return false
+	}
+	switch token.GetTokenType() {
+	case antlr.TokenEOF, SPLParserPIPE, SPLParserRBRACKET, SPLParserRPAREN:
+	default:
+		return false
+	}
+	insideExpression := false
+	for rule := parser.GetParserRuleContext(); rule != nil; {
+		if budget != nil {
+			budget.step()
+		}
+		switch rule.(type) {
+		case *ExpressionContext, *ComparisonExpressionContext, *PrimaryExpressionContext,
+			*AdditiveExpressionContext, *MultiplicativeExpressionContext:
+			insideExpression = true
+		case *WhereCommandContext:
+			return insideExpression
+		}
+		parent, ok := rule.GetParent().(antlr.ParserRuleContext)
+		if !ok {
+			break
+		}
+		rule = parent
+	}
+	return false
 }
 
 func normalizeSPLQuery(query string) string {
@@ -1761,6 +1798,16 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 
 	// Parse the query
 	tree := parser.Query()
+	if parserErrors.truncatedNativeWherePredicate {
+		budget.check()
+		allErrors := append(lexerErrors.errors, parserErrors.errors...)
+		return &ParseResult{
+			Conditions:           []Condition{},
+			Commands:             []string{},
+			ExpressionIncomplete: true,
+			Errors:               allErrors,
+		}
+	}
 
 	// Walk the tree to extract conditions
 	budget.step() // source-binding map allocation
