@@ -2922,7 +2922,7 @@ func (e *conditionExtractor) EnterComparisonExpression(ctx *ComparisonExpression
 			return
 		}
 		lhs.Source, rhs.Source = e.sourceOf(operands[0]), e.sourceOf(operands[1])
-		op := ctx.ComparisonOp().GetText()
+		op := e.authoredComparisonOperator(ctx.ComparisonOp().GetText(), operands[0].GetStop().GetStop(), operands[1].GetStart().GetStart())
 		if lhs.Kind != OperandField {
 			lhs, rhs, op = rhs, lhs, invertComparison(op)
 		}
@@ -2981,6 +2981,13 @@ func (e *conditionExtractor) extractComparisonOperator(ctx *ConditionContext) st
 		return op
 	}
 	left, right := ctx.FieldName().GetStop().GetStop(), ctx.Value().GetStart().GetStart()
+	return e.authoredComparisonOperator(op, left, right)
+}
+
+func (e *conditionExtractor) authoredComparisonOperator(op string, left, right int) string {
+	if op != "=" {
+		return op
+	}
 	if left >= 0 && right >= 0 && left < len(e.sourceMap.spans) && right < len(e.sourceMap.spans) {
 		start, end := e.sourceMap.spans[left].end, e.sourceMap.spans[right].start
 		if end >= start && end <= len(e.originalQuery) && strings.Contains(e.originalQuery[start:end], "==") {

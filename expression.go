@@ -113,7 +113,18 @@ func (b *splExpressionBuilder) tree(node antlr.Tree) *ConditionExpression {
 	case ISubsearchContext:
 		return nil
 	case ISearchCommandContext:
+		if implicitPipelineCommand(ctx, b.budget) {
+			if !knownNonPredicatePipelineCommand(ctx.GetStart().GetText()) {
+				b.incomplete = true
+			}
+			return nil
+		}
 		return b.searchExpression(ctx.SearchExpression())
+	case IGenericCommandContext:
+		if !knownNonPredicatePipelineCommand(ctx.IDENTIFIER().GetText()) {
+			b.incomplete = true
+		}
+		return nil
 	case IWhereCommandContext:
 		return b.whereExpression(ctx.Expression())
 	case ITstatsCommandContext:
@@ -129,6 +140,35 @@ func (b *splExpressionBuilder) tree(node antlr.Tree) *ConditionExpression {
 		expression = combineConditionExpressions(BooleanAnd, expression, b.tree(node.GetChild(i)))
 	}
 	return expression
+}
+
+// The grammar accepts a later unprefixed searchCommand as a generic pipeline
+// command. Only the first stage of a query without a leading pipe is an
+// implicit search; this decision is local to each parsed query scope.
+func implicitPipelineCommand(ctx ISearchCommandContext, budget *parseBudget) bool {
+	budget.step()
+	if ctx.SEARCH() != nil {
+		return false
+	}
+	stage, stageOK := ctx.GetParent().(IPipelineStageContext)
+	if !stageOK {
+		return false
+	}
+	query, queryOK := stage.GetParent().(IQueryContext)
+	if !queryOK {
+		return false
+	}
+	return query.GetChildCount() == 0 || query.GetChild(0) != stage
+}
+
+// These known generic stages add no event predicate: resource writes are
+// represented by metadata, and makeresults generates rows for later stages.
+func knownNonPredicatePipelineCommand(name string) bool {
+	switch strings.ToLower(name) {
+	case "outputlookup", "collect", "makeresults":
+		return true
+	}
+	return false
 }
 
 func collectSPLSearchExpressions(tree antlr.Tree, budget *parseBudget) []ISearchExpressionContext {
