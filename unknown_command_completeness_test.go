@@ -103,3 +103,25 @@ func TestAuthoredEqualityOperatorOnAdditiveComparison(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthoredEqualityOperatorIgnoresCommentText(t *testing.T) {
+	for _, tc := range []struct {
+		query, operator string
+	}{
+		{"| where x ``` == ``` = \"a\"", "="},
+		{"| where \"a\" ``` == ``` = x", "="},
+		{"| where x ``` = ``` == \"a\"", "=="},
+		{"| where \"a\" ``` = ``` == x", "=="},
+	} {
+		parsed := ExtractConditions(tc.query)
+		semantic := AnalyzeQuery(tc.query)
+		if len(parsed.Errors) != 0 || len(parsed.Warnings) != 0 || parsed.ExpressionIncomplete || len(parsed.Conditions) != 1 ||
+			parsed.Conditions[0].Field != "x" || parsed.Conditions[0].Operator != tc.operator {
+			t.Errorf("parsed operator %q: %#v", tc.query, parsed)
+		}
+		if len(semantic.Errors) != 0 || len(semantic.Warnings) != 0 || len(semantic.Conditions) != 1 ||
+			semantic.Conditions[0].Field != "x" || semantic.Conditions[0].Operator != tc.operator {
+			t.Errorf("semantic operator %q: %#v", tc.query, semantic)
+		}
+	}
+}

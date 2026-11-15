@@ -73,10 +73,12 @@ func mapSPLDoubleEquals(query string, spans []sourceRuneSpan, budget *parseBudge
 		} else if inString && value == quote && !escapedSPLRune(runes, i) {
 			inString = false
 		}
+		operatorSpan := spans[i]
 		if !inString && value == '=' && i+1 < len(runes) && runes[i+1] == '=' {
+			operatorSpan.end = spans[i+1].end
 			i++
 		}
-		out, mapped = append(out, value), append(mapped, spans[i])
+		out, mapped = append(out, value), append(mapped, operatorSpan)
 	}
 	return string(out), mapped
 }
