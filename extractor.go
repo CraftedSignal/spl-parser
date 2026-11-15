@@ -19,16 +19,54 @@ var MaxParseTime = 5 * time.Second
 
 // Condition represents a field condition extracted from an SPL query
 type Condition struct {
-	Field          string   `json:"field"`
-	Operator       string   `json:"operator"`
-	Value          string   `json:"value"`
-	ValueReference string   `json:"value_reference,omitempty"` // Field referenced by a where comparison
-	Negated        bool     `json:"negated"`
-	PipeStage      int      `json:"pipe_stage"`
-	LogicalOp      string   `json:"logical_op"`             // "AND" or "OR" connecting to previous condition
-	Alternatives   []string `json:"alternatives,omitempty"` // For OR conditions on same field
-	IsComputed     bool     `json:"is_computed,omitempty"`  // True if field was created by eval/rex
-	SourceField    string   `json:"source_field,omitempty"` // Original field before transformation (for computed fields)
+	Field          string           `json:"field"`
+	Context        PredicateContext `json:"context,omitempty"`
+	LHS            *Operand         `json:"lhs,omitempty"`
+	RHS            *Operand         `json:"rhs,omitempty"`
+	Operator       string           `json:"operator"`
+	Value          string           `json:"value"`
+	ValueReference string           `json:"value_reference,omitempty"` // Field referenced by a where comparison
+	Negated        bool             `json:"negated"`
+	PipeStage      int              `json:"pipe_stage"`
+	LogicalOp      string           `json:"logical_op"`             // "AND" or "OR" connecting to previous condition
+	Alternatives   []string         `json:"alternatives,omitempty"` // For OR conditions on same field
+	IsComputed     bool             `json:"is_computed,omitempty"`  // True if field was created by eval/rex
+	SourceField    string           `json:"source_field,omitempty"` // Original field before transformation (for computed fields)
+}
+
+// PredicateContext identifies the SPL syntax that assigned operand roles.
+type PredicateContext string
+
+const (
+	PredicateSearch   PredicateContext = "search"
+	PredicateEval     PredicateContext = "eval"
+	PredicateResource PredicateContext = "resource"
+)
+
+// OperandKind describes syntax and role, not an event column's runtime type.
+type OperandKind string
+
+const (
+	OperandString OperandKind = "string"
+	OperandNumber OperandKind = "number"
+	OperandField  OperandKind = "field"
+	OperandBare   OperandKind = "bare"
+	OperandList   OperandKind = "list"
+)
+
+type Operand struct {
+	Kind   OperandKind `json:"kind"`
+	Source string      `json:"source,omitempty"`
+	Value  string      `json:"value,omitempty"`
+	Items  []Operand   `json:"items,omitempty"`
+}
+
+// ScalarPredicate retains a complete predicate whose semantics are opaque here.
+type ScalarPredicate struct {
+	Expression string           `json:"expression"`
+	Context    PredicateContext `json:"context"`
+	Negated    bool             `json:"negated,omitempty"`
+	PipeStage  int              `json:"pipe_stage"`
 }
 
 // ParseResult contains all conditions extracted from the query
@@ -134,6 +172,8 @@ type conditionExtractor struct {
 	*BaseSPLParserListener
 	conditions       []Condition
 	conditionSources conditionSourceBindings
+	scalarRoots      map[antlr.Tree]bool
+	scalarDepth      int
 	groupByFields    []string          // Fields from stats BY clauses
 	aggregations     []Aggregation     // Aggregations computed by stats-like commands
 	computedFields   map[string]string // Fields created by eval commands: computed field -> source field
@@ -152,6 +192,7 @@ type conditionExtractor struct {
 	errors           []string
 	tokenStream      *antlr.CommonTokenStream // Needed to extract subsearch text
 	originalQuery    string                   // Original query string for text extraction
+	sourceMap        splSourceMap
 }
 
 // errorListener collects parse errors
@@ -181,6 +222,7 @@ func normalizeSPLQuery(query string) string {
 	normalized = stripSPLBacktickComments(normalized)
 	normalized = normalizeSPLDoubleEquals(normalized)
 	normalized = normalizeSPLBangFunctions(normalized)
+	normalized = normalizeSPLAdjacentWildcardPredicates(normalized)
 	normalized = normalizeSPLInputlookupKeywordOptions(normalized)
 	return normalized
 }
@@ -1418,11 +1460,11 @@ func extractCommandResourceConditions(query string, budget *parseBudget) []Condi
 		lower := strings.ToLower(trimmed)
 		switch {
 		case strings.HasPrefix(lower, "inputlookup "):
-			if value := firstCommandResourceArg(trimmed, "inputlookup"); value != "" {
+			if value := firstCommandResourceArgSource(trimmed, "inputlookup"); value != "" {
 				conditions = budget.appendConditions(conditions, resourceCondition("_spl.inputlookup", value, stage))
 			}
 		case strings.HasPrefix(lower, "outputlookup "):
-			if value := firstCommandResourceArg(trimmed, "outputlookup"); value != "" {
+			if value := firstCommandResourceArgSource(trimmed, "outputlookup"); value != "" {
 				conditions = budget.appendConditions(conditions, resourceCondition("_spl.outputlookup", value, stage))
 			}
 		case strings.HasPrefix(lower, "collect "):
@@ -1442,22 +1484,34 @@ func extractCommandResourceConditions(query string, budget *parseBudget) []Condi
 }
 
 func resourceCondition(field, value string, stage int) Condition {
+	kind := OperandBare
+	if strings.HasPrefix(value, `"`) || strings.HasPrefix(value, "'") {
+		kind = OperandString
+	}
+	decoded := normalizePortableValue(value)
 	return Condition{
 		Field:     field,
+		Context:   PredicateResource,
+		LHS:       &Operand{Kind: OperandField, Value: field},
+		RHS:       &Operand{Kind: kind, Source: value, Value: decoded},
 		Operator:  "=",
-		Value:     normalizePortableValue(value),
+		Value:     decoded,
 		PipeStage: stage,
 		LogicalOp: "AND",
 	}
 }
 
 func firstCommandResourceArg(segment, command string) string {
+	return normalizePortableValue(firstCommandResourceArgSource(segment, command))
+}
+
+func firstCommandResourceArgSource(segment, command string) string {
 	rest := strings.TrimSpace(segment[len(command):])
 	for _, arg := range splitSPLArgs(rest) {
 		if strings.Contains(arg, "=") {
 			continue
 		}
-		return normalizePortableValue(arg)
+		return arg
 	}
 	return ""
 }
@@ -1605,6 +1659,8 @@ func trimMatchingQuotes(value string) string {
 type conditionIdentity struct {
 	field, operator, value, valueReference string
 	logicalOp, sourceField, alternatives   string
+	context                                PredicateContext
+	lhs, rhs                               string
 	negated, isComputed                    bool
 	pipeStage                              int
 }
@@ -1619,6 +1675,7 @@ func identityOfCondition(condition Condition, budget *parseBudget) conditionIden
 	}
 	return conditionIdentity{
 		field: condition.Field, operator: condition.Operator, value: condition.Value,
+		context: condition.Context, lhs: operandIdentity(condition.LHS, budget), rhs: operandIdentity(condition.RHS, budget),
 		valueReference: condition.ValueReference, logicalOp: condition.LogicalOp,
 		sourceField: condition.SourceField, alternatives: alternatives.String(),
 		negated: condition.Negated, isComputed: condition.IsComputed, pipeStage: condition.PipeStage,
@@ -1691,7 +1748,7 @@ func extractConditionsContext(ctx context.Context, query string, limits parseLim
 func extractConditionsInternal(query string, budget *parseBudget) (result *ParseResult) {
 	budget.input(query)
 	preflight(query, budget, false, nil)
-	normalizedQuery := normalizeSPLQuery(query)
+	normalizedQuery, sourceMap := normalizeSPLQueryMapped(query, budget)
 	budget.input(normalizedQuery)
 	lexerErrors := &errorListener{budget: budget}
 	stream := preflight(normalizedQuery, budget, true, lexerErrors)
@@ -1711,6 +1768,7 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 		budget:           budget,
 		conditions:       make([]Condition, 0),
 		conditionSources: make(conditionSourceBindings),
+		scalarRoots:      make(map[antlr.Tree]bool),
 		computedFields:   make(map[string]string), // computed field -> source field
 		fieldAliases:     make(map[string]string), // rename mappings: new name -> original name
 		commands:         make([]string, 0),
@@ -1719,6 +1777,7 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 		lastLogicalOp:    "AND", // default
 		tokenStream:      stream,
 		originalQuery:    query,
+		sourceMap:        sourceMap,
 	}
 	antlr.ParseTreeWalkerDefault.Walk(extractor, tree)
 	budget.check()
@@ -1747,13 +1806,15 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	conditions, conditionIndexMap := groupORConditionsByExpression(rawConditions, rawExpression, budget)
 	expression := remapConditionExpression(rawExpression, conditionIndexMap, budget)
 	recoveredWithPortableExtraction := false
-	if len(allErrors) > 0 {
+	if len(allErrors) > 0 && containsScalarExpression(expression) {
+		incomplete = true
+	} else if len(allErrors) > 0 {
 		if portableConditions := extractPortableSPLConditions(query, budget); len(portableConditions) > 0 {
 			conditions = portableConditions
 			expression = nil
 			recoveredWithPortableExtraction = true
 		}
-	} else if len(conditions) == 0 {
+	} else if len(conditions) == 0 && !containsScalarExpression(expression) {
 		if portableConditions := extractPortableSPLConditions(query, budget); len(portableConditions) > 0 {
 			conditions = portableConditions
 			expression = nil
@@ -1777,10 +1838,14 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 		conditions, indexMap = deduplicateConditionsWithIndexMap(combined, budget)
 		expression = remapConditionExpression(expression, indexMap, budget)
 	}
-	if recoveredWithPortableExtraction {
+	if recoveredWithPortableExtraction && !containsScalarExpression(expression) {
 		allErrors = nil
 	}
 
+	for i := range conditions {
+		budget.step()
+		budget.reserveOutput(operandNodeCount(conditions[i].LHS, budget) + operandNodeCount(conditions[i].RHS, budget))
+	}
 	budget.outputSize(len(conditions))
 	budget.check()
 
@@ -1839,18 +1904,10 @@ func (e *conditionExtractor) extractSubsearchText(ctx *SubsearchContext) string 
 	if ctx == nil || ctx.Query() == nil {
 		return ""
 	}
-	queryCtx := ctx.Query()
-	start := queryCtx.GetStart()
-	stop := queryCtx.GetStop()
-	if start == nil || stop == nil {
-		return queryCtx.GetText()
+	if len(e.sourceMap.spans) == 0 {
+		return ctx.Query().GetText()
 	}
-	startPos := start.GetStart()
-	stopPos := stop.GetStop()
-	if startPos >= 0 && stopPos >= startPos && stopPos < len(e.originalQuery) {
-		return e.originalQuery[startPos : stopPos+1]
-	}
-	return queryCtx.GetText()
+	return e.sourceOf(ctx.Query())
 }
 
 // EnterJoinCommand extracts join metadata and recursively parses the subsearch
@@ -2027,144 +2084,56 @@ func ClassifyFieldProvenance(result *ParseResult, field string) FieldProvenance 
 	return ProvenanceAmbiguous
 }
 
-// EnterFunctionCall handles function calls.
-// - For cidrmatch, match, and like: extract as conditions
-// - For other functions (eval, count, sum, etc.): track depth to skip nested conditions
+// EnterFunctionCall extracts only argument shapes that the Condition model can
+// represent. Other complete calls are retained by the scalar expression path.
 func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
-	// Skip function calls inside subsearches
-	if e.inSubsearch > 0 {
-		e.inFunctionCall++
-		return
-	}
-	if e.inEvalCommand > 0 {
-		e.inFunctionCall++
-		return
-	}
-	if e.inStatsFunction > 0 {
-		e.inFunctionCall++
-		return
-	}
-
-	// Check for cidrmatch(cidr, field) - extracts a CIDR match condition
-	if ctx.CIDRMATCH() != nil {
-		args := ctx.ArgumentList()
-		if args != nil {
-			allArgs := args.AllExpression()
-			if len(allArgs) >= 2 {
-				// First arg is CIDR, second is field
-				cidr := strings.Trim(allArgs[0].GetText(), "\"'")
-				field := allArgs[1].GetText()
-				cond := Condition{
-					Field:     field,
-					Operator:  "cidrmatch",
-					Value:     cidr,
-					Negated:   e.negated,
-					PipeStage: e.currentStage,
-					LogicalOp: e.lastLogicalOp,
-				}
-				e.appendSourcedCondition(cond, ctx)
-				e.lastLogicalOp = "AND"
-			}
-		}
-		return // Don't increment inFunctionCall for these
-	}
-
-	// Check for match(field, regex) - extracts a regex match condition
-	if ctx.MATCH() != nil {
-		args := ctx.ArgumentList()
-		if args != nil {
-			allArgs := args.AllExpression()
-			if len(allArgs) >= 2 {
-				// First arg is field, second is regex
-				field := allArgs[0].GetText()
-				regex := strings.Trim(allArgs[1].GetText(), "\"'")
-				cond := Condition{
-					Field:     field,
-					Operator:  "matches",
-					Value:     regex,
-					Negated:   e.negated,
-					PipeStage: e.currentStage,
-					LogicalOp: e.lastLogicalOp,
-				}
-				e.appendSourcedCondition(cond, ctx)
-				e.lastLogicalOp = "AND"
-			}
-		}
-		return // Don't increment inFunctionCall for these
-	}
-
-	// Check for like(field, pattern) - extracts a like pattern condition
-	if ctx.LIKE() != nil {
-		args := ctx.ArgumentList()
-		if args != nil {
-			allArgs := args.AllExpression()
-			if len(allArgs) >= 2 {
-				// First arg is field, second is pattern
-				field := allArgs[0].GetText()
-				pattern := strings.Trim(allArgs[1].GetText(), "\"'")
-				// Convert SQL LIKE pattern to wildcard
-				pattern = strings.ReplaceAll(pattern, "%", "*")
-				cond := Condition{
-					Field:     field,
-					Operator:  "like",
-					Value:     pattern,
-					Negated:   e.negated,
-					PipeStage: e.currentStage,
-					LogicalOp: e.lastLogicalOp,
-				}
-				e.appendSourcedCondition(cond, ctx)
-				e.lastLogicalOp = "AND"
-			}
-		}
-		return // Don't increment inFunctionCall for these
-	}
-
-	// Check for isnotnull(field) - extracts an exists condition
-	if ctx.ISNOTNULL() != nil {
-		args := ctx.ArgumentList()
-		if args != nil {
-			allArgs := args.AllExpression()
-			if len(allArgs) >= 1 {
-				field := allArgs[0].GetText()
-				cond := Condition{
-					Field:     field,
-					Operator:  "isnotnull",
-					Value:     "",
-					Negated:   e.negated,
-					PipeStage: e.currentStage,
-					LogicalOp: e.lastLogicalOp,
-				}
-				e.appendSourcedCondition(cond, ctx)
-				e.lastLogicalOp = "AND"
-			}
-		}
-		return
-	}
-
-	// Check for isnull(field) - extracts a null check condition
-	if ctx.ISNULL() != nil {
-		args := ctx.ArgumentList()
-		if args != nil {
-			allArgs := args.AllExpression()
-			if len(allArgs) >= 1 {
-				field := allArgs[0].GetText()
-				cond := Condition{
-					Field:     field,
-					Operator:  "isnull",
-					Value:     "",
-					Negated:   e.negated,
-					PipeStage: e.currentStage,
-					LogicalOp: e.lastLogicalOp,
-				}
-				e.appendSourcedCondition(cond, ctx)
-				e.lastLogicalOp = "AND"
-			}
-		}
-		return
-	}
-
-	// For other function calls, track depth to skip nested conditions
 	e.inFunctionCall++
+	if e.scalarDepth > 0 || e.inSubsearch > 0 || e.inEvalCommand > 0 || e.inStatsFunction > 0 || e.inFunctionCall > 1 ||
+		!representedBareFunction(ctx, e.budget) {
+		return
+	}
+	args := ctx.ArgumentList().AllExpression()
+	syntax := predicateContextFor(ctx, e.budget)
+	var lhs, rhs *Operand
+	operator := ""
+	switch {
+	case ctx.CIDRMATCH() != nil:
+		rhs = directExpressionOperand(args[0], e.budget)
+		lhs = directExpressionOperand(args[1], e.budget)
+		operator = "cidrmatch"
+		rhs.Source, lhs.Source = e.sourceOf(args[0]), e.sourceOf(args[1])
+	case ctx.MATCH() != nil, ctx.LIKE() != nil:
+		lhs = directExpressionOperand(args[0], e.budget)
+		rhs = directExpressionOperand(args[1], e.budget)
+		lhs.Source, rhs.Source = e.sourceOf(args[0]), e.sourceOf(args[1])
+		if ctx.MATCH() != nil {
+			operator = "matches"
+		} else {
+			operator = "like"
+		}
+	case ctx.ISNULL() != nil, ctx.ISNOTNULL() != nil:
+		lhs = directExpressionOperand(args[0], e.budget)
+		lhs.Source = e.sourceOf(args[0])
+		if ctx.ISNULL() != nil {
+			operator = "isnull"
+		} else {
+			operator = "isnotnull"
+		}
+	}
+	if lhs == nil || lhs.Kind != OperandField || operator == "" {
+		return
+	}
+	value := ""
+	if rhs != nil {
+		value = rhs.Value
+	}
+	if operator == "like" {
+		value = strings.ReplaceAll(value, "%", "*")
+	}
+	condition := Condition{Field: lhs.Value, Context: syntax, LHS: lhs, RHS: rhs, Operator: operator,
+		Value: value, Negated: e.negated, PipeStage: e.currentStage, LogicalOp: e.lastLogicalOp}
+	e.appendSourcedCondition(condition, ctx)
+	e.lastLogicalOp = "AND"
 }
 
 // ExitFunctionCall tracks when we exit a function call
@@ -2770,9 +2739,14 @@ func (e *conditionExtractor) EnterBareWord(ctx *BareWordContext) {
 			negated = !negated
 		}
 		cond := Condition{
-			Field: "_raw", Operator: "contains", Value: value,
+			Field: "_raw", Context: PredicateSearch, LHS: &Operand{Kind: OperandField, Value: "_raw"}, Operator: "contains", Value: value,
 			Negated: negated, PipeStage: e.currentStage, LogicalOp: e.lastLogicalOp,
 		}
+		kind := OperandBare
+		if ctx.QUOTED_STRING() != nil {
+			kind = OperandString
+		}
+		cond.RHS = &Operand{Kind: kind, Source: e.sourceOf(ctx), Value: value}
 		e.appendSourcedCondition(cond, ctx)
 		e.lastLogicalOp = "AND"
 	}
@@ -2781,6 +2755,9 @@ func (e *conditionExtractor) EnterBareWord(ctx *BareWordContext) {
 
 // EnterCondition extracts field conditions
 func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
+	if e.scalarDepth > 0 {
+		return
+	}
 	// Skip conditions inside subsearches (like join)
 	if e.inSubsearch > 0 {
 		return
@@ -2805,7 +2782,17 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 
 	// Check for field comparison: field op value
 	if ctx.FieldName() != nil && ctx.ComparisonOp() != nil && ctx.Value() != nil {
-		field := ctx.FieldName().GetText()
+		syntax := predicateContextFor(ctx, e.budget)
+		if syntax == "" {
+			return
+		}
+		lhs, rhs, scalar := directConditionOperands(ctx, syntax)
+		if scalar {
+			return
+		}
+		lhs.Source = e.sourceOf(ctx.FieldName())
+		rhs.Source = e.sourceOf(ctx.Value())
+		field := lhs.Value
 		fieldLower := strings.ToLower(field)
 
 		// Skip SPL keywords (metadata fields like index, sourcetype, etc.).
@@ -2818,9 +2805,18 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 		op := e.extractComparisonOperator(ctx)
 		value := extractValue(ctx.Value())
 		valueReference := ""
-		if e.inWhereCommand > 0 && splValueIsFieldReference(ctx.Value(), value) {
-			valueReference = value
-			value = ""
+		if syntax == PredicateEval && rhs != nil {
+			if lhs.Kind != OperandField && rhs.Kind == OperandField {
+				lhs, rhs = rhs, lhs
+				field = lhs.Value
+				fieldLower = strings.ToLower(field)
+				op = invertComparison(op)
+			}
+			if rhs.Kind == OperandField {
+				valueReference, value = rhs.Value, ""
+			} else {
+				value = rhs.Value
+			}
 		}
 
 		// Check if this is a computed field and get its source field
@@ -2828,6 +2824,9 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 
 		cond := Condition{
 			Field:          field,
+			Context:        syntax,
+			LHS:            lhs,
+			RHS:            rhs,
 			Operator:       op,
 			Value:          value,
 			ValueReference: valueReference,
@@ -2846,7 +2845,16 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 	// This preserves correct semantics for NOT field IN (...) which requires AND logic (not match ANY),
 	// unlike expanded form which would be OR logic.
 	if ctx.FieldName() != nil && ctx.IN() != nil && ctx.ValueList() != nil {
-		field := ctx.FieldName().GetText()
+		syntax := predicateContextFor(ctx, e.budget)
+		if syntax == "" {
+			return
+		}
+		lhs, _, scalar := directConditionOperands(ctx, syntax)
+		if scalar {
+			return
+		}
+		lhs.Source = e.sourceOf(ctx.FieldName())
+		field := lhs.Value
 		fieldLower := strings.ToLower(field)
 
 		// Skip SPL keywords
@@ -2858,10 +2866,23 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 		sourceField, isComputed := e.computedFields[fieldLower]
 
 		values := extractValueList(ctx.ValueList())
+		items := make([]Operand, 0, len(ctx.ValueList().AllValue()))
+		for _, item := range ctx.ValueList().AllValue() {
+			e.budget.step()
+			operand := operandFromValue(item, syntax)
+			if operand == nil {
+				return
+			}
+			operand.Source = e.sourceOf(item)
+			items = append(items, *operand)
+		}
 
 		// Create a single IN condition with all values
 		cond := Condition{
 			Field:        field,
+			Context:      syntax,
+			LHS:          lhs,
+			RHS:          &Operand{Kind: OperandList, Source: e.sourceOf(ctx.ValueList()), Items: items},
 			Operator:     "in",
 			Value:        values[0], // Primary value for backward compatibility
 			Negated:      e.negated,
@@ -2876,41 +2897,96 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 	}
 }
 
+func (e *conditionExtractor) EnterComparisonExpression(ctx *ComparisonExpressionContext) {
+	if e.inSubsearch > 0 || e.inEvalCommand > 0 || e.inStatsFunction > 0 || e.inFunctionCall > 0 || e.scalarDepth > 0 ||
+		predicateContextFor(ctx, e.budget) != PredicateEval {
+		return
+	}
+	shape := classifyComparison(ctx, e.budget)
+	if shape.kind == predicateAtom && ctx.Condition() == nil && ctx.ComparisonOp() != nil {
+		operands := ctx.AllAdditiveExpression()
+		if len(operands) != 2 {
+			return
+		}
+		lhs := directAdditiveOperand(operands[0], e.budget)
+		rhs := directAdditiveOperand(operands[1], e.budget)
+		if lhs == nil || rhs == nil {
+			return
+		}
+		lhs.Source, rhs.Source = e.sourceOf(operands[0]), e.sourceOf(operands[1])
+		op := ctx.ComparisonOp().GetText()
+		if lhs.Kind != OperandField {
+			lhs, rhs, op = rhs, lhs, invertComparison(op)
+		}
+		if lhs.Kind != OperandField {
+			return
+		}
+		field := lhs.Value
+		if isExcludedField(strings.ToLower(field)) && !strings.HasPrefix(lhs.Source, "'") && !statsColumnNames[strings.ToLower(field)] {
+			return
+		}
+		value, reference := rhs.Value, ""
+		if rhs.Kind == OperandField {
+			value, reference = "", rhs.Value
+		}
+		sourceField, computed := e.computedFields[strings.ToLower(field)]
+		e.appendSourcedCondition(Condition{Field: field, Context: PredicateEval, LHS: lhs, RHS: rhs,
+			Operator: op, Value: value, ValueReference: reference, Negated: e.negated,
+			PipeStage: e.currentStage, LogicalOp: e.lastLogicalOp, IsComputed: computed, SourceField: sourceField}, ctx)
+		e.lastLogicalOp = "AND"
+		return
+	}
+	if shape.kind != predicateScalar {
+		return
+	}
+	source := e.sourceOf(ctx)
+	if source == "" {
+		return
+	}
+	e.budget.reserveOutput(1)
+	scalar := &ScalarPredicate{Expression: source, Context: PredicateEval, PipeStage: e.currentStage}
+	e.budget.step()
+	e.conditionSources[ctx] = conditionSourceBinding{scalar: scalar}
+	e.scalarRoots[ctx] = true
+	e.scalarDepth++
+}
+
+func (e *conditionExtractor) ExitComparisonExpression(ctx *ComparisonExpressionContext) {
+	if e.scalarRoots[ctx] {
+		e.scalarDepth--
+	}
+}
+
+func (e *conditionExtractor) sourceOf(ctx antlr.ParserRuleContext) string {
+	if ctx == nil || ctx.GetStart() == nil || ctx.GetStop() == nil {
+		return ""
+	}
+	start, stop := ctx.GetStart().GetStart(), ctx.GetStop().GetStop()
+	e.budget.step()
+	return e.sourceMap.source(start, stop)
+}
+
 func (e *conditionExtractor) extractComparisonOperator(ctx *ConditionContext) string {
 	op := ctx.ComparisonOp().GetText()
-	if op != "=" || ctx.FieldName() == nil || ctx.Value() == nil || e.originalQuery == "" {
+	if op != "=" || ctx.FieldName() == nil || ctx.Value() == nil ||
+		ctx.FieldName().GetStop() == nil || ctx.Value().GetStart() == nil {
 		return op
 	}
-	if strings.Contains(e.originalQuery, ctx.FieldName().GetText()+"==") {
-		return "=="
-	}
-	fieldStart := ctx.FieldName().GetStart()
-	fieldStop := ctx.FieldName().GetStop()
-	valueStart := ctx.Value().GetStart()
-	valueStop := ctx.Value().GetStop()
-	if fieldStop == nil || valueStart == nil {
-		return op
-	}
-	if fieldStart != nil && valueStop != nil {
-		startPos := fieldStart.GetStart()
-		stopPos := valueStop.GetStop()
-		if startPos >= 0 && stopPos >= startPos && stopPos < len(e.originalQuery) {
-			if strings.Contains(e.originalQuery[startPos:stopPos+1], "==") {
-				return "=="
-			}
+	left, right := ctx.FieldName().GetStop().GetStop(), ctx.Value().GetStart().GetStart()
+	if left >= 0 && right >= 0 && left < len(e.sourceMap.spans) && right < len(e.sourceMap.spans) {
+		start, end := e.sourceMap.spans[left].end, e.sourceMap.spans[right].start
+		if end >= start && end <= len(e.originalQuery) && strings.Contains(e.originalQuery[start:end], "==") {
+			return "=="
 		}
 	}
-	startPos := fieldStop.GetStop() + 1
-	valuePos := valueStart.GetStart()
-	if startPos < 0 || valuePos < startPos || valuePos >= len(e.originalQuery) {
-		return op
-	}
-	endPos := valuePos
-	if e.originalQuery[valuePos] == '=' {
-		endPos = valuePos + 1
-	}
-	if strings.Contains(e.originalQuery[startPos:endPos], "==") {
-		return "=="
+	if len(e.sourceMap.spans) == 0 && left >= 0 && right > left && right <= len(e.originalQuery) {
+		end := right
+		if end < len(e.originalQuery) && e.originalQuery[end] == '=' {
+			end++
+		}
+		if strings.Contains(e.originalQuery[left+1:end], "==") {
+			return "=="
+		}
 	}
 	return op
 }
@@ -3041,6 +3117,8 @@ func groupORConditionsByExpression(conditions []Condition, expression *Condition
 	// growing prefix for every sibling makes ordinary long OR lists quadratic.
 	type alternativesGroup struct {
 		values []string
+		items  []Operand
+		typed  bool
 		seen   map[string]struct{}
 	}
 	groups := make(map[int]*alternativesGroup)
@@ -3049,13 +3127,30 @@ func groupORConditionsByExpression(conditions []Condition, expression *Condition
 		if len(values) == 0 {
 			values = []string{condition.Value}
 		}
-		for _, value := range values {
+		for i, value := range values {
 			budget.step()
-			if _, exists := group.seen[value]; exists {
+			var item *Operand
+			if condition.RHS != nil {
+				if condition.RHS.Kind == OperandList && i < len(condition.RHS.Items) {
+					item = &condition.RHS.Items[i]
+				}
+				if condition.RHS.Kind != OperandList && i == 0 {
+					item = condition.RHS
+				}
+			}
+			key := value
+			if item != nil {
+				key = operandIdentity(item, budget)
+			}
+			if _, exists := group.seen[key]; exists {
 				continue
 			}
-			group.seen[value] = struct{}{}
+			group.seen[key] = struct{}{}
 			group.values = append(group.values, value)
+			if item != nil {
+				group.typed = true
+				group.items = append(group.items, *cloneOperand(item, budget))
+			}
 		}
 	}
 	result := make([]Condition, 0, len(conditions))
@@ -3081,6 +3176,10 @@ func groupORConditionsByExpression(conditions []Condition, expression *Condition
 	for start, group := range groups {
 		budget.step()
 		result[indexMap[start]].Alternatives = group.values
+		if group.typed {
+			budget.reserveOutput(1)
+			result[indexMap[start]].RHS = &Operand{Kind: OperandList, Items: group.items}
+		}
 	}
 	return result, indexMap
 }
@@ -3093,10 +3192,32 @@ func sameConditionGroup(a, b Condition) bool {
 	if a.Field != b.Field || a.Operator != b.Operator || a.PipeStage != b.PipeStage || a.SourceField != b.SourceField {
 		return false
 	}
+	if a.Context != b.Context || operandIdentity(a.LHS, nil) != operandIdentity(b.LHS, nil) ||
+		!eligibleGroupedRHS(a.RHS) || !eligibleGroupedRHS(b.RHS) {
+		return false
+	}
 	if strings.EqualFold(a.Operator, "like") {
 		return likePatternKind(a.Value) == likePatternKind(b.Value)
 	}
 	return true
+}
+
+func eligibleGroupedRHS(rhs *Operand) bool {
+	if rhs == nil {
+		return true
+	} // caller-created legacy conditions retain unknown provenance
+	switch rhs.Kind {
+	case OperandString, OperandNumber, OperandBare:
+		return true
+	case OperandList:
+		for _, item := range rhs.Items {
+			if !eligibleGroupedRHS(&item) || item.Kind == OperandList {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func likePatternKind(pattern string) string {
@@ -3116,13 +3237,16 @@ func likePatternKind(pattern string) string {
 }
 
 func conditionDedupKey(cond Condition) string {
-	return strings.ToLower(cond.Field) + "|" +
-		cond.Operator + "|" +
-		cond.Value + "|" +
-		boolKey(cond.Negated) + "|" +
-		boolKey(cond.IsComputed) + "|" +
-		strings.ToLower(cond.SourceField) + "|" +
-		strings.Join(cond.Alternatives, "\x00")
+	var builder strings.Builder
+	for _, part := range []string{strings.ToLower(cond.Field), cond.Operator, cond.Value, cond.ValueReference,
+		string(cond.Context), operandIdentity(cond.LHS, nil), operandIdentity(cond.RHS, nil),
+		boolKey(cond.Negated), boolKey(cond.IsComputed), strings.ToLower(cond.SourceField)} {
+		appendIdentityPart(&builder, part)
+	}
+	for _, value := range cond.Alternatives {
+		appendIdentityPart(&builder, value)
+	}
+	return builder.String()
 }
 
 func boolKey(value bool) string {
@@ -3142,11 +3266,14 @@ func DeduplicateConditions(conditions []Condition) []Condition {
 	fieldConditions := make(map[string][]Condition)
 	for _, cond := range conditions {
 		// Skip pure wildcards
-		if cond.Value == "*" {
+		if cond.Value == "*" && cond.Context == PredicateSearch && cond.RHS != nil && cond.RHS.Kind == OperandBare {
 			continue
 		}
-		fieldLower := strings.ToLower(cond.Field)
-		fieldConditions[fieldLower] = append(fieldConditions[fieldLower], cond)
+		var fieldKey strings.Builder
+		appendIdentityPart(&fieldKey, strings.ToLower(cond.Field))
+		appendIdentityPart(&fieldKey, string(cond.Context))
+		key := fieldKey.String()
+		fieldConditions[key] = append(fieldConditions[key], cond)
 	}
 
 	// Keep only conditions from the latest pipe stage for each field
@@ -3168,6 +3295,9 @@ func DeduplicateConditions(conditions []Condition) []Condition {
 				key := conditionDedupKey(cond)
 				if !seen[key] {
 					seen[key] = true
+					cond.LHS = cloneOperand(cond.LHS, nil)
+					cond.RHS = cloneOperand(cond.RHS, nil)
+					cond.Alternatives = append([]string(nil), cond.Alternatives...)
 					result = append(result, cond)
 				}
 			}

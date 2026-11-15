@@ -20,18 +20,31 @@ func TestWhereBuilderRejectsUnrepresentedWholeShapes(t *testing.T) {
 		`isnull(lower(y))`, `match(y,otherField)`, `isnull("literal")`,
 		`match(y)`, `isnull(y,z)`,
 	}
+	scalarShapes := map[string]bool{
+		`(x="u")=false`: true, `(isnull(y))=false`: true, `((isnull(y)))=true`: true,
+		`isnull(y)=false`: true, `len(y)>2`: true, `mystery(y)`: true,
+		`false()`: true, `true()`: true, `NOT ((x="u")=false)`: true,
+		`NOT (x="u" OR false())`: true, `y`: true, `1`: true, `"literal"`: true,
+		`isnull(lower(y))`: true, `match(y,otherField)`: true,
+		`isnull("literal")`: true, `match(y)`: true, `isnull(y,z)`: true,
+	}
 	for _, fragment := range fragments {
 		t.Run(fragment, func(t *testing.T) {
 			query := `| where ` + fragment
 			assertWholeSPLQueryConsumed(t, query)
 			got := ExtractConditions(query)
-			if len(got.Errors) != 0 || !got.ExpressionIncomplete || got.Expression != nil || len(got.Warnings) == 0 {
-				t.Fatalf("whole unsupported shape: %#v", got)
-			}
-			semantic := AnalyzeQuery(query)
-			if len(semantic.Errors) != 0 || semantic.Expression != nil || len(semantic.Warnings) == 0 ||
-				len(semantic.Conditions) != len(got.Conditions) {
-				t.Fatalf("semantic unsupported shape: %#v", semantic)
+			if scalarShapes[fragment] {
+				if len(got.Errors) != 0 || got.ExpressionIncomplete || got.Expression == nil || !containsScalarExpression(got.Expression) || len(got.Warnings) != 0 {
+					t.Fatalf("complete opaque scalar shape: %#v", got)
+				}
+				semantic := AnalyzeQuery(query)
+				if len(semantic.Errors) != 0 || semantic.Expression == nil || len(semantic.Warnings) != 0 {
+					t.Fatalf("semantic opaque scalar shape: %#v", semantic)
+				}
+			} else {
+				if len(got.Errors) != 0 || !got.ExpressionIncomplete || got.Expression != nil || len(got.Warnings) == 0 {
+					t.Fatalf("whole unsupported shape: %#v", got)
+				}
 			}
 		})
 	}
@@ -149,7 +162,7 @@ func TestWhereBuilderIncompleteBlocksSiblingAlternatives(t *testing.T) {
 			t.Run(query, func(t *testing.T) {
 				assertWholeSPLQueryConsumed(t, query)
 				got := ExtractConditions(query)
-				if len(got.Errors) != 0 || !got.ExpressionIncomplete || got.Expression != nil || len(got.Warnings) == 0 {
+				if len(got.Errors) != 0 || got.ExpressionIncomplete || got.Expression == nil || !containsScalarExpression(got.Expression) || len(got.Warnings) != 0 {
 					t.Fatalf("unsupported sibling merged: %#v", got)
 				}
 				var xValues []string
@@ -165,7 +178,7 @@ func TestWhereBuilderIncompleteBlocksSiblingAlternatives(t *testing.T) {
 					t.Fatalf("original x conditions changed: %#v", got.Conditions)
 				}
 				semantic := AnalyzeQuery(query)
-				if len(semantic.Errors) != 0 || semantic.Expression != nil || len(semantic.Warnings) == 0 {
+				if len(semantic.Errors) != 0 || semantic.Expression == nil || len(semantic.Warnings) != 0 {
 					t.Fatalf("semantic unsupported sibling: %#v", semantic)
 				}
 			})

@@ -245,11 +245,7 @@ func TestSPLValueGroupingAndDedupEdges(t *testing.T) {
 		t.Fatalf("dedup did not keep latest user stage: %#v", deduped)
 	}
 	requireSPLCondition(t, deduped, "Host", "=", "server", false)
-	for _, condition := range deduped {
-		if condition.Value == "*" {
-			t.Fatalf("pure wildcard condition was not removed: %#v", deduped)
-		}
-	}
+	requireSPLCondition(t, deduped, "EventCode", "=", "*", false) // Legacy callers have unknown role.
 }
 
 func TestSPLPipelineStageClassificationEdges(t *testing.T) {

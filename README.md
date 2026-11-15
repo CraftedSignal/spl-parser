@@ -66,16 +66,23 @@ Found 4 conditions:
 
 ### Advanced Usage
 
-For complete Boolean expressions, direct OR siblings on the same field may be
-stored as one condition with ordered `Alternatives`. When an operand cannot be
-represented (for example, `len(y)>2`, `false()`, or `isnull(y)=false` in a
-`where` clause), extracted conditions
-remain available, while `ExpressionIncomplete` is true and `Expression` is nil.
-`AnalyzeQuery` also leaves its expression nil in that case. Resource entries
-such as `_spl.outputlookup` are metadata and do not become expression leaves.
-Boolean expressions are complete only when each predicate is directly represented
-by an extracted condition; parentheses preserve that proof, while arithmetic or
-an outer comparison around a predicate does not.
+`Condition.Context`, `LHS`, and `RHS` record the authoritative syntax roles of
+supported predicates. In `where`, `x=42` has a numeric RHS, `x="42"` has a string
+RHS, and `x=y` has a field-reference RHS. `Operand.Source` retains the authored
+spelling. Search clauses use search field/value roles, and resource conditions
+use the resource context. Nil operands or an empty context on caller-created
+conditions mean that provenance is unknown; decoded `Value` does not infer it.
+
+Direct OR siblings on the same field may be stored as one condition with
+ordered `Alternatives` and matching typed `RHS.Items`. A complete predicate
+that cannot be represented as a field condition, such as `5<10` or
+`len(y)>2`, appears as a `BooleanScalar` expression leaf with its full original
+source. Scalar leaves are unevaluated syntax. Callers that execute expressions
+must inspect every leaf and reject scalar forms they do not support. Flat
+`Conditions` omit scalar predicates and are therefore only a field-predicate
+projection when scalars occur. Malformed or unresolved syntax still reports
+`ExpressionIncomplete`; resource entries such as `_spl.outputlookup` do not
+become expression leaves.
 
 ```go
 // Extract with full context

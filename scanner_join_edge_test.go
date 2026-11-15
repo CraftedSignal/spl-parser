@@ -120,9 +120,10 @@ func TestSPLExpressionScannerAndDedupBoundaryEdges(t *testing.T) {
 		{Field: "User", Operator: "=", Value: "bob", PipeStage: 1, Negated: true},
 		{Field: "User", Operator: "=", Value: "bob", PipeStage: 1, Negated: true},
 	})
-	if len(deduped) != 2 {
+	if len(deduped) != 3 {
 		t.Fatalf("deduped conditions = %#v", deduped)
 	}
 	requireSPLCondition(t, deduped, "User", "=", "alice", false)
 	requireSPLCondition(t, deduped, "User", "=", "bob", true)
+	requireSPLCondition(t, deduped, "EventCode", "=", "*", false)
 }

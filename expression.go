@@ -13,6 +13,7 @@ const (
 	BooleanCondition BooleanOperator = "condition"
 	BooleanAnd       BooleanOperator = "and"
 	BooleanOr        BooleanOperator = "or"
+	BooleanScalar    BooleanOperator = "scalar"
 )
 
 // ConditionExpression preserves boolean grouping over extracted Conditions.
@@ -20,6 +21,7 @@ const (
 type ConditionExpression struct {
 	Operator       BooleanOperator        `json:"operator"`
 	ConditionIndex int                    `json:"condition_index"`
+	Scalar         *ScalarPredicate       `json:"scalar,omitempty"`
 	Children       []*ConditionExpression `json:"children,omitempty"`
 }
 
@@ -36,7 +38,7 @@ func buildConditionExpressionWithCompleteness(tree antlr.Tree, conditions []Cond
 	}
 	if expression, incomplete := buildPipelineConditionExpressionWithCompleteness(tree, conditions, budget, sources); incomplete {
 		return nil, true
-	} else if expression != nil && len(conditions) >= 2 {
+	} else if expression != nil && (len(conditions) >= 2 || containsScalarExpression(expression)) {
 		return expression, false
 	}
 	if sources != nil {
@@ -95,6 +97,7 @@ type conditionSourceBinding struct {
 	first   int
 	count   int
 	invalid bool
+	scalar  *ScalarPredicate
 }
 
 type conditionSourceBindings map[antlr.Tree]conditionSourceBinding
@@ -382,6 +385,14 @@ func (b *splExpressionBuilder) comparisonExpression(ctx IComparisonExpressionCon
 	switch shape.kind {
 	case predicateAtom:
 		return b.boundCondition(shape.source, 0, 1)
+	case predicateScalar:
+		if scalar := b.sources[shape.source].scalar; scalar != nil {
+			b.budget.reserveOutput(1)
+			copy := *scalar
+			return &ConditionExpression{Operator: BooleanScalar, ConditionIndex: -1, Scalar: &copy}
+		}
+		b.incomplete = true
+		return nil
 	case predicateParenthesis:
 		return b.whereExpression(shape.nested)
 	case predicateNeutral:
@@ -392,6 +403,21 @@ func (b *splExpressionBuilder) comparisonExpression(ctx IComparisonExpressionCon
 	}
 }
 
+func containsScalarExpression(expression *ConditionExpression) bool {
+	if expression == nil {
+		return false
+	}
+	if expression.Operator == BooleanScalar {
+		return true
+	}
+	for _, child := range expression.Children {
+		if containsScalarExpression(child) {
+			return true
+		}
+	}
+	return false
+}
+
 type predicateShapeKind uint8
 
 const (
@@ -399,6 +425,7 @@ const (
 	predicateAtom
 	predicateParenthesis
 	predicateNeutral
+	predicateScalar
 )
 
 type predicateShape struct {
@@ -425,7 +452,22 @@ func classifyComparison(ctx IComparisonExpressionContext, budget *parseBudget) p
 		return predicateShape{}
 	}
 	if condition, ok := directRuleChild[IConditionContext](ctx, budget); ok {
-		return classifyCondition(condition, budget)
+		shape := classifyCondition(condition, budget)
+		if shape.kind == predicateScalar {
+			shape.source = ctx
+		}
+		return shape
+	}
+	if ctx.GetChildCount() == 3 && ctx.ComparisonOp() != nil {
+		operands := ctx.AllAdditiveExpression()
+		if len(operands) == 2 {
+			left := directAdditiveOperand(operands[0], budget)
+			right := directAdditiveOperand(operands[1], budget)
+			if left != nil && right != nil && (left.Kind == OperandField || right.Kind == OperandField) {
+				return predicateShape{kind: predicateAtom, source: ctx}
+			}
+		}
+		return predicateShape{kind: predicateScalar, source: ctx}
 	}
 	additive, ok := directRuleChild[IAdditiveExpressionContext](ctx, budget)
 	if !ok {
@@ -438,6 +480,12 @@ func classifyComparison(ctx IComparisonExpressionContext, budget *parseBudget) p
 	unary, ok := directRuleChild[IUnaryExpressionContext](multiplicative, budget)
 	if !ok {
 		return predicateShape{}
+	}
+	if primary, ok := directRuleChild[IPrimaryExpressionContext](unary, budget); ok && primary.FunctionCall() != nil {
+		return predicateShape{kind: predicateScalar, source: ctx}
+	}
+	if primary, ok := directRuleChild[IPrimaryExpressionContext](unary, budget); ok && primary.Value() != nil {
+		return predicateShape{kind: predicateScalar, source: ctx}
 	}
 	primary, ok := directRuleChild[IPrimaryExpressionContext](unary, budget)
 	if !ok || primary.GetChildCount() != 3 || primary.LPAREN() == nil || primary.RPAREN() == nil || primary.Expression() == nil {
@@ -464,6 +512,11 @@ func classifyCondition(ctx IConditionContext, budget *parseBudget) predicateShap
 		if !comparison && !literalIN {
 			return predicateShape{}
 		}
+		syntax := predicateContextFor(ctx, budget)
+		_, _, scalar := directConditionOperands(ctx, syntax)
+		if scalar {
+			return predicateShape{kind: predicateScalar, source: ctx}
+		}
 		fieldLower := strings.ToLower(ctx.FieldName().GetText())
 		if isExcludedField(fieldLower) && (!comparison || !statsColumnNames[fieldLower]) {
 			return predicateShape{kind: predicateNeutral}
@@ -471,8 +524,11 @@ func classifyCondition(ctx IConditionContext, budget *parseBudget) predicateShap
 		return predicateShape{kind: predicateAtom, source: ctx}
 	}
 	call, ok := directRuleChild[IFunctionCallContext](ctx, budget)
-	if !ok || !representedBareFunction(call, budget) {
+	if !ok {
 		return predicateShape{}
+	}
+	if !representedBareFunction(call, budget) {
+		return predicateShape{kind: predicateScalar, source: ctx}
 	}
 	return predicateShape{kind: predicateAtom, source: call}
 }
@@ -542,24 +598,14 @@ func directArgumentPrimary(ctx IExpressionContext, budget *parseBudget) IPrimary
 }
 
 func directFieldArgument(ctx IExpressionContext, budget *parseBudget) bool {
-	primary := directArgumentPrimary(ctx, budget)
-	if primary == nil || primary.GetChildCount() != 1 {
-		return false
-	}
-	if primary.FieldName() != nil {
-		return primary.GetChild(0) == primary.FieldName()
-	}
-	if value := primary.Value(); value != nil && value.IDENTIFIER() != nil && value.GetChildCount() == 1 {
-		lower := strings.ToLower(value.GetText())
-		return primary.GetChild(0) == value && lower != "true" && lower != "false" && lower != "null"
-	}
-	return false
+	operand := directExpressionOperand(ctx, budget)
+	return operand != nil && operand.Kind == OperandField
 }
 
 func directQuotedArgument(ctx IExpressionContext, budget *parseBudget) bool {
 	primary := directArgumentPrimary(ctx, budget)
 	return primary != nil && primary.GetChildCount() == 1 && primary.Value() != nil && primary.GetChild(0) == primary.Value() &&
-		primary.Value().GetChildCount() == 1 && primary.Value().QUOTED_STRING() != nil
+		primary.Value().GetChildCount() == 1 && primary.Value().QUOTED_STRING() != nil && strings.HasPrefix(primary.Value().GetText(), `"`)
 }
 
 func (b *splExpressionBuilder) condition() *ConditionExpression {
@@ -603,6 +649,13 @@ func remapConditionExpression(expression *ConditionExpression, indexMap []int, b
 		return expression
 	}
 	switch expression.Operator {
+	case BooleanScalar:
+		if expression.Scalar == nil {
+			return nil
+		}
+		budget.reserveOutput(1)
+		copy := *expression.Scalar
+		return &ConditionExpression{Operator: BooleanScalar, ConditionIndex: -1, Scalar: &copy}
 	case BooleanCondition:
 		if expression.ConditionIndex < 0 || expression.ConditionIndex >= len(indexMap) {
 			return nil
@@ -667,6 +720,14 @@ func equalConditionExpression(a, b *ConditionExpression, budgets ...*parseBudget
 	if a.Operator != b.Operator || a.ConditionIndex != b.ConditionIndex || len(a.Children) != len(b.Children) {
 		return false
 	}
+	if a.Operator == BooleanScalar {
+		if a.Scalar == nil || b.Scalar == nil {
+			return a.Scalar == b.Scalar
+		}
+		if *a.Scalar != *b.Scalar {
+			return false
+		}
+	}
 	for i := range a.Children {
 		budget.step()
 		if !equalConditionExpression(a.Children[i], b.Children[i], budget) {
@@ -702,6 +763,13 @@ func demorganConditionExpression(expression *ConditionExpression) *ConditionExpr
 		return nil
 	}
 	switch expression.Operator {
+	case BooleanScalar:
+		if expression.Scalar == nil {
+			return nil
+		}
+		copy := *expression.Scalar
+		copy.Negated = !copy.Negated
+		return &ConditionExpression{Operator: BooleanScalar, ConditionIndex: -1, Scalar: &copy}
 	case BooleanAnd:
 		converted := &ConditionExpression{Operator: BooleanOr}
 		for _, child := range expression.Children {
