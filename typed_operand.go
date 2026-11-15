@@ -89,7 +89,7 @@ func operandFromValue(ctx IValueContext, syntax PredicateContext) *Operand {
 	source := ctx.GetText()
 	value := source
 	if ctx.QUOTED_STRING() != nil {
-		value = decodeEscapedQuotes(trimMatchingQuotes(source))
+		value = decodeSPLQuotedOperand(trimMatchingQuotes(source))
 		if syntax == PredicateEval && strings.HasPrefix(source, "'") {
 			return &Operand{Kind: OperandField, Source: source, Value: value}
 		}
@@ -104,7 +104,38 @@ func operandFromValue(ctx IValueContext, syntax PredicateContext) *Operand {
 		}
 		return &Operand{Kind: OperandField, Source: source, Value: value}
 	}
+	if syntax == PredicateEval {
+		return nil
+	}
 	return &Operand{Kind: OperandBare, Source: source, Value: value}
+}
+
+// Decode one authored escape layer. Unknown escapes remain literal so a path
+// cannot silently lose a backslash; legacy Condition.Value stays separate.
+func decodeSPLQuotedOperand(source string) string {
+	var decoded strings.Builder
+	decoded.Grow(len(source))
+	for i := 0; i < len(source); i++ {
+		if source[i] != '\\' || i+1 >= len(source) {
+			decoded.WriteByte(source[i])
+			continue
+		}
+		i++
+		switch source[i] {
+		case '\\', '"', '\'':
+			decoded.WriteByte(source[i])
+		case 't':
+			decoded.WriteByte('\t')
+		case 'n':
+			decoded.WriteByte('\n')
+		case 'r':
+			decoded.WriteByte('\r')
+		default:
+			decoded.WriteByte('\\')
+			decoded.WriteByte(source[i])
+		}
+	}
+	return decoded.String()
 }
 
 func operandFromField(ctx IFieldNameContext, syntax PredicateContext) *Operand {
@@ -150,13 +181,21 @@ func invertComparison(op string) string {
 	return op
 }
 
-func directConditionOperands(ctx IConditionContext, syntax PredicateContext) (lhs, rhs *Operand, scalar bool) {
+func directConditionOperands(ctx IConditionContext, syntax PredicateContext, budget *parseBudget) (lhs, rhs *Operand, scalar bool) {
 	if ctx == nil || ctx.FieldName() == nil {
 		return nil, nil, false
 	}
 	lhs = operandFromField(ctx.FieldName(), syntax)
 	if ctx.Value() != nil {
 		rhs = operandFromValue(ctx.Value(), syntax)
+	}
+	if ctx.IN() != nil && ctx.ValueList() != nil {
+		for _, item := range ctx.ValueList().AllValue() {
+			budget.step()
+			if operandFromValue(item, syntax) == nil {
+				return lhs, nil, true
+			}
+		}
 	}
 	if syntax == PredicateEval {
 		if lhs == nil || (ctx.Value() != nil && rhs == nil) {

@@ -1821,7 +1821,7 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 		}
 	}
 	if resourceConditions := extractCommandResourceConditions(normalizedQuery, budget); len(resourceConditions) > 0 {
-		if len(conditions) == 0 {
+		if len(conditions) == 0 && expression == nil {
 			expression = nil
 			recoveredWithPortableExtraction = len(allErrors) > 0
 		}
@@ -2126,6 +2126,9 @@ func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 	value := ""
 	if rhs != nil {
 		value = rhs.Value
+		if rhs.Kind == OperandString {
+			value = trimMatchingQuotes(rhs.Source)
+		}
 	}
 	if operator == "like" {
 		value = strings.ReplaceAll(value, "%", "*")
@@ -2733,7 +2736,8 @@ func (e *conditionExtractor) EnterBareWord(ctx *BareWordContext) {
 			directNot = !directNot
 		}
 	}
-	for i, value := range searchBareWordSpan(ctx, e.budget) {
+	values, stop := searchBareWordSpanWithEnd(ctx, e.budget)
+	for i, value := range values {
 		negated := e.negated
 		if i > 0 && directNot {
 			negated = !negated
@@ -2743,10 +2747,17 @@ func (e *conditionExtractor) EnterBareWord(ctx *BareWordContext) {
 			Negated: negated, PipeStage: e.currentStage, LogicalOp: e.lastLogicalOp,
 		}
 		kind := OperandBare
+		source := e.sourceOf(ctx)
 		if ctx.QUOTED_STRING() != nil {
 			kind = OperandString
+		} else {
+			start := ctx.GetStart().GetStart()
+			e.budget.step()
+			if len(values) == 1 && stop >= start {
+				source = e.sourceMap.source(start, stop)
+			}
 		}
-		cond.RHS = &Operand{Kind: kind, Source: e.sourceOf(ctx), Value: value}
+		cond.RHS = &Operand{Kind: kind, Source: source, Value: value}
 		e.appendSourcedCondition(cond, ctx)
 		e.lastLogicalOp = "AND"
 	}
@@ -2786,7 +2797,7 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 		if syntax == "" {
 			return
 		}
-		lhs, rhs, scalar := directConditionOperands(ctx, syntax)
+		lhs, rhs, scalar := directConditionOperands(ctx, syntax, e.budget)
 		if scalar {
 			return
 		}
@@ -2812,9 +2823,12 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 				fieldLower = strings.ToLower(field)
 				op = invertComparison(op)
 			}
-			if rhs.Kind == OperandField {
+			switch rhs.Kind {
+			case OperandField:
 				valueReference, value = rhs.Value, ""
-			} else {
+			case OperandString:
+				value = trimMatchingQuotes(rhs.Source)
+			default:
 				value = rhs.Value
 			}
 		}
@@ -2849,7 +2863,7 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 		if syntax == "" {
 			return
 		}
-		lhs, _, scalar := directConditionOperands(ctx, syntax)
+		lhs, _, scalar := directConditionOperands(ctx, syntax, e.budget)
 		if scalar {
 			return
 		}

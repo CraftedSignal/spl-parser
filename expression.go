@@ -233,14 +233,20 @@ func (b *splExpressionBuilder) searchTermExpressions(ctx ISearchTermContext) []*
 // The grammar can parse key* as two terms, whereas key * is an implicit AND.
 // Extraction and expression construction must consume the same single leaf.
 func searchBareWordSpan(ctx IBareWordContext, budget *parseBudget) []string {
+	values, _ := searchBareWordSpanWithEnd(ctx, budget)
+	return values
+}
+
+func searchBareWordSpanWithEnd(ctx IBareWordContext, budget *parseBudget) ([]string, int) {
 	budget.step()
-	value := ctx.GetStart().GetInputStream().GetText(ctx.GetStart().GetStart(), ctx.GetStop().GetStop())
+	stop := ctx.GetStop().GetStop()
+	value := ctx.GetStart().GetInputStream().GetText(ctx.GetStart().GetStart(), stop)
 	if ctx.QUOTED_STRING() != nil {
-		return []string{trimMatchingQuotes(value)}
+		return []string{trimMatchingQuotes(value)}, stop
 	}
 	term, ok := ctx.GetParent().(ISearchTermContext)
 	if !ok {
-		return strings.Fields(value)
+		return strings.Fields(value), stop
 	}
 	for {
 		budget.step()
@@ -252,14 +258,14 @@ func searchBareWordSpan(ctx IBareWordContext, budget *parseBudget) []string {
 	}
 	expression, ok := term.GetParent().(ISearchExpressionContext)
 	if !ok {
-		return strings.Fields(value)
+		return strings.Fields(value), stop
 	}
 	terms := expression.AllSearchTerm()
 	// A whole positive, unquoted search * stage adds no event predicate.
 	// Keep wildcard operands inside Boolean expressions and negated terms.
 	if len(terms) == 1 && value == "*" && term.NOT() == nil {
 		if _, standalone := expression.GetParent().(ISearchCommandContext); standalone {
-			return nil
+			return nil, stop
 		}
 	}
 	for i, candidate := range terms {
@@ -268,14 +274,15 @@ func searchBareWordSpan(ctx IBareWordContext, budget *parseBudget) []string {
 			continue
 		}
 		if i > 0 && adjacentBareSearchTerms(terms[i-1], candidate, budget) {
-			return nil
+			return nil, stop
 		}
 		for j := i + 1; j < len(terms) && adjacentBareSearchTerms(terms[j-1], terms[j], budget); j++ {
-			value = ctx.GetStart().GetInputStream().GetText(ctx.GetStart().GetStart(), terms[j].GetStop().GetStop())
+			stop = terms[j].GetStop().GetStop()
+			value = ctx.GetStart().GetInputStream().GetText(ctx.GetStart().GetStart(), stop)
 		}
 		break
 	}
-	return strings.Fields(value)
+	return strings.Fields(value), stop
 }
 
 func adjacentBareSearchTerms(left, right ISearchTermContext, budget *parseBudget) bool {
@@ -467,7 +474,7 @@ func classifyComparison(ctx IComparisonExpressionContext, budget *parseBudget) p
 				return predicateShape{kind: predicateAtom, source: ctx}
 			}
 		}
-		return predicateShape{kind: predicateScalar, source: ctx}
+		return eligibleScalarShape(ctx, budget)
 	}
 	additive, ok := directRuleChild[IAdditiveExpressionContext](ctx, budget)
 	if !ok {
@@ -482,10 +489,10 @@ func classifyComparison(ctx IComparisonExpressionContext, budget *parseBudget) p
 		return predicateShape{}
 	}
 	if primary, ok := directRuleChild[IPrimaryExpressionContext](unary, budget); ok && primary.FunctionCall() != nil {
-		return predicateShape{kind: predicateScalar, source: ctx}
+		return eligibleScalarShape(ctx, budget)
 	}
 	if primary, ok := directRuleChild[IPrimaryExpressionContext](unary, budget); ok && primary.Value() != nil {
-		return predicateShape{kind: predicateScalar, source: ctx}
+		return eligibleScalarShape(ctx, budget)
 	}
 	primary, ok := directRuleChild[IPrimaryExpressionContext](unary, budget)
 	if !ok || primary.GetChildCount() != 3 || primary.LPAREN() == nil || primary.RPAREN() == nil || primary.Expression() == nil {
@@ -513,9 +520,12 @@ func classifyCondition(ctx IConditionContext, budget *parseBudget) predicateShap
 			return predicateShape{}
 		}
 		syntax := predicateContextFor(ctx, budget)
-		_, _, scalar := directConditionOperands(ctx, syntax)
+		if syntax == PredicateEval && evalWildcardInCondition(ctx, budget) {
+			return predicateShape{}
+		}
+		_, _, scalar := directConditionOperands(ctx, syntax, budget)
 		if scalar {
-			return predicateShape{kind: predicateScalar, source: ctx}
+			return eligibleScalarShape(ctx, budget)
 		}
 		fieldLower := strings.ToLower(ctx.FieldName().GetText())
 		if isExcludedField(fieldLower) && (!comparison || !statsColumnNames[fieldLower]) {
@@ -528,9 +538,49 @@ func classifyCondition(ctx IConditionContext, budget *parseBudget) predicateShap
 		return predicateShape{}
 	}
 	if !representedBareFunction(call, budget) {
-		return predicateShape{kind: predicateScalar, source: ctx}
+		return eligibleScalarShape(ctx, budget)
 	}
 	return predicateShape{kind: predicateAtom, source: call}
+}
+
+func evalWildcardInCondition(ctx IConditionContext, budget *parseBudget) bool {
+	if value := ctx.Value(); value != nil && value.WildcardValue() != nil {
+		return true
+	}
+	if ctx.ValueList() != nil {
+		for _, value := range ctx.ValueList().AllValue() {
+			budget.step()
+			if value.WildcardValue() != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func eligibleScalarShape(node antlr.Tree, budget *parseBudget) predicateShape {
+	if unresolvedScalarExpansion(node, budget) {
+		return predicateShape{}
+	}
+	return predicateShape{kind: predicateScalar, source: node}
+}
+
+// An enclosing scalar cannot be complete if a macro or subsearch must expand
+// before its value is known. The nested query remains independently parsed.
+func unresolvedScalarExpansion(node antlr.Tree, budget *parseBudget) bool {
+	budget.step()
+	if _, nested := node.(ISubsearchContext); nested {
+		return true
+	}
+	if terminal, ok := node.(antlr.TerminalNode); ok {
+		return terminal.GetSymbol().GetTokenType() == SPLParserMACRO
+	}
+	for i := 0; i < node.GetChildCount(); i++ {
+		if unresolvedScalarExpansion(node.GetChild(i), budget) {
+			return true
+		}
+	}
+	return false
 }
 
 func representedBareFunction(call IFunctionCallContext, budget *parseBudget) bool {
