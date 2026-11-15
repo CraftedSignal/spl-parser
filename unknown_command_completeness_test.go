@@ -80,9 +80,19 @@ func TestKnownPipelineCommandsStayComplete(t *testing.T) {
 	} {
 		parsed := ExtractConditions(query)
 		semantic := AnalyzeQuery(query)
-		if len(parsed.Errors) != 0 || len(parsed.Warnings) != 0 || parsed.ExpressionIncomplete ||
-			len(semantic.Errors) != 0 || len(semantic.Warnings) != 0 {
+		if len(parsed.Errors) != 0 || parsed.ExpressionIncomplete || len(semantic.Errors) != 0 ||
+			len(parsed.Warnings) != len(semantic.Warnings) || parsed.Dataflow == nil || semantic.Dataflow == nil {
 			t.Errorf("known command %q: parsed=%#v semantic=%#v", query, parsed, semantic)
+			continue
+		}
+		for i, warning := range parsed.Warnings {
+			if !strings.HasPrefix(warning, "dataflow:") || semantic.Warnings[i] != warning || parsed.Dataflow.Complete {
+				t.Errorf("known command %q gained non-dataflow warning: %q", query, warning)
+			}
+		}
+		if (strings.Contains(query, "| head") || strings.Contains(query, "| table") || strings.Contains(query, "| stats") ||
+			query == `| where x="a" | search y=z`) && (!parsed.Dataflow.Complete || len(parsed.Warnings) != 0) {
+			t.Errorf("supported command %q lost complete dataflow: %#v", query, parsed.Dataflow)
 		}
 	}
 }

@@ -84,6 +84,29 @@ projection when scalars occur. Malformed or unresolved syntax still reports
 `ExpressionIncomplete`; resource entries such as `_spl.outputlookup` do not
 become expression leaves.
 
+`ParseResult.Dataflow` and `SemanticQuery.Dataflow` record the ordered field
+environments of parsed pipeline stages. Each stage has its authored `Source`,
+input and output scope IDs, and any field bindings. `eval` assignments have
+separate bindings and intermediate scopes in left-to-right order, including
+repeated writes to one field. A condition's `StageID`, `InputScopeID`, and
+`FieldBinding` identify the field definition visible at that occurrence;
+field-kind `LHS` and `RHS` operands have their own binding references. A
+`FieldBinding.Expression` is unevaluated source text interpreted in its
+`InputScopeID`. IDs are local to each returned query result. Child queries
+are referenced through paths such as `joins/0` and `subsearches/0`.
+
+Check `Dataflow.Complete` before using these scopes to plan field access.
+An opaque stage retains its source and emits a `dataflow:` warning and a
+machine-readable diagnostic; later field references through its output have
+unknown provenance. `ExpressionIncomplete` remains a separate indicator of
+predicate coverage, and `SemanticQuery` carries it unchanged. A complete
+dataflow describes binding and rowset order; it does not certify that a
+backend can evaluate every expression or command. `Aggregations` are also
+available on `SemanticQuery` with the same stage and binding IDs.
+
+`ComputedFields` and `FieldAliases` summarize final names for compatibility.
+Use the per-occurrence binding references for historical field lookup.
+
 ```go
 // Extract with full context
 result := spl.ExtractConditions(query)

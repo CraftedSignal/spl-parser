@@ -19,19 +19,23 @@ var MaxParseTime = 5 * time.Second
 
 // Condition represents a field condition extracted from an SPL query
 type Condition struct {
-	Field          string           `json:"field"`
-	Context        PredicateContext `json:"context,omitempty"`
-	LHS            *Operand         `json:"lhs,omitempty"`
-	RHS            *Operand         `json:"rhs,omitempty"`
-	Operator       string           `json:"operator"`
-	Value          string           `json:"value"`
-	ValueReference string           `json:"value_reference,omitempty"` // Field referenced by a where comparison
-	Negated        bool             `json:"negated"`
-	PipeStage      int              `json:"pipe_stage"`
-	LogicalOp      string           `json:"logical_op"`             // "AND" or "OR" connecting to previous condition
-	Alternatives   []string         `json:"alternatives,omitempty"` // For OR conditions on same field
-	IsComputed     bool             `json:"is_computed,omitempty"`  // True if field was created by eval/rex
-	SourceField    string           `json:"source_field,omitempty"` // Original field before transformation (for computed fields)
+	StageID             string           `json:"stage_id,omitempty"`
+	InputScopeID        string           `json:"input_scope_id,omitempty"`
+	FieldBinding        *FieldBindingRef `json:"field_binding,omitempty"`
+	pendingFieldBinding pendingFieldBinding
+	Field               string           `json:"field"`
+	Context             PredicateContext `json:"context,omitempty"`
+	LHS                 *Operand         `json:"lhs,omitempty"`
+	RHS                 *Operand         `json:"rhs,omitempty"`
+	Operator            string           `json:"operator"`
+	Value               string           `json:"value"`
+	ValueReference      string           `json:"value_reference,omitempty"` // Field referenced by a where comparison
+	Negated             bool             `json:"negated"`
+	PipeStage           int              `json:"pipe_stage"`
+	LogicalOp           string           `json:"logical_op"`             // "AND" or "OR" connecting to previous condition
+	Alternatives        []string         `json:"alternatives,omitempty"` // For OR conditions on same field
+	IsComputed          bool             `json:"is_computed,omitempty"`  // True if field was created by eval/rex
+	SourceField         string           `json:"source_field,omitempty"` // Original field before transformation (for computed fields)
 }
 
 // PredicateContext identifies the SPL syntax that assigned operand roles.
@@ -55,22 +59,27 @@ const (
 )
 
 type Operand struct {
-	Kind   OperandKind `json:"kind"`
-	Source string      `json:"source,omitempty"`
-	Value  string      `json:"value,omitempty"`
-	Items  []Operand   `json:"items,omitempty"`
+	FieldBinding        *FieldBindingRef `json:"field_binding,omitempty"`
+	pendingFieldBinding pendingFieldBinding
+	Kind                OperandKind `json:"kind"`
+	Source              string      `json:"source,omitempty"`
+	Value               string      `json:"value,omitempty"`
+	Items               []Operand   `json:"items,omitempty"`
 }
 
 // ScalarPredicate retains a complete predicate whose semantics are opaque here.
 type ScalarPredicate struct {
-	Expression string           `json:"expression"`
-	Context    PredicateContext `json:"context"`
-	Negated    bool             `json:"negated,omitempty"`
-	PipeStage  int              `json:"pipe_stage"`
+	StageID      string           `json:"stage_id,omitempty"`
+	InputScopeID string           `json:"input_scope_id,omitempty"`
+	Expression   string           `json:"expression"`
+	Context      PredicateContext `json:"context"`
+	Negated      bool             `json:"negated,omitempty"`
+	PipeStage    int              `json:"pipe_stage"`
 }
 
 // ParseResult contains all conditions extracted from the query
 type ParseResult struct {
+	Dataflow             *QueryDataflow       `json:"dataflow,omitempty"`
 	Conditions           []Condition          `json:"conditions"`
 	Expression           *ConditionExpression `json:"expression,omitempty"`
 	ExpressionIncomplete bool                 `json:"expression_incomplete,omitempty"`
@@ -88,6 +97,8 @@ type ParseResult struct {
 // Aggregation is one stats-like aggregation and the column it outputs.
 // Conditions with a higher PipeStage filter the aggregated results.
 type Aggregation struct {
+	StageID   string `json:"stage_id,omitempty"`
+	BindingID string `json:"binding_id,omitempty"`
 	Command   string `json:"command"`         // stats, eventstats, streamstats, chart, timechart, tstats, mstats, top or rare
 	Function  string `json:"function"`        // Lower-case aggregation function, e.g. count, dc, sum
 	Field     string `json:"field,omitempty"` // Aggregated field when the argument is a plain field
@@ -170,29 +181,34 @@ func IsCommandKeyword(field string) bool {
 type conditionExtractor struct {
 	budget *parseBudget
 	*BaseSPLParserListener
-	conditions       []Condition
-	conditionSources conditionSourceBindings
-	scalarRoots      map[antlr.Tree]bool
-	scalarDepth      int
-	groupByFields    []string          // Fields from stats BY clauses
-	aggregations     []Aggregation     // Aggregations computed by stats-like commands
-	computedFields   map[string]string // Fields created by eval commands: computed field -> source field
-	fieldAliases     map[string]string // Rename mappings: new name -> original name
-	commands         []string          // Commands used in the query (stats, eventstats, etc.)
-	joins            []JoinInfo        // Extracted join info
-	subsearches      []*ParseResult    // Direct subsearch parse results
-	currentStage     int
-	inSubsearch      int // depth of subsearch nesting
-	inFunctionCall   int // depth of function call nesting (eval, count, etc.)
-	inStatsFunction  int // depth of stats function nesting (count(), sum(), etc.)
-	inEvalCommand    int // depth of eval command expressions; assignments compute fields, they do not filter events
-	inWhereCommand   int // depth of where command predicates
-	negated          bool
-	lastLogicalOp    string
-	errors           []string
-	tokenStream      *antlr.CommonTokenStream // Needed to extract subsearch text
-	originalQuery    string                   // Original query string for text extraction
-	sourceMap        splSourceMap
+	conditions        []Condition
+	conditionSources  conditionSourceBindings
+	scalarRoots       map[antlr.Tree]bool
+	scalarDepth       int
+	groupByFields     []string          // Fields from stats BY clauses
+	aggregations      []Aggregation     // Aggregations computed by stats-like commands
+	computedFields    map[string]string // Fields created by eval commands: computed field -> source field
+	fieldAliases      map[string]string // Rename mappings: new name -> original name
+	commands          []string          // Commands used in the query (stats, eventstats, etc.)
+	joins             []JoinInfo        // Extracted join info
+	subsearches       []*ParseResult    // Direct subsearch parse results
+	currentStage      int
+	stageNumbers      map[*PipelineStageContext]int
+	subsearchIndices  map[*SubsearchContext]int
+	dataflowOwners    []dataflowOwnerFrame
+	ownerByContext    map[antlr.ParserRuleContext]int
+	canonicalChildren map[antlr.ParserRuleContext]string
+	inSubsearch       int // depth of subsearch nesting
+	inFunctionCall    int // depth of function call nesting (eval, count, etc.)
+	inStatsFunction   int // depth of stats function nesting (count(), sum(), etc.)
+	inEvalCommand     int // depth of eval command expressions; assignments compute fields, they do not filter events
+	inWhereCommand    int // depth of where command predicates
+	negated           bool
+	lastLogicalOp     string
+	errors            []string
+	tokenStream       *antlr.CommonTokenStream // Needed to extract subsearch text
+	originalQuery     string                   // Original query string for text extraction
+	sourceMap         splSourceMap
 }
 
 // errorListener collects parse errors
@@ -1694,6 +1710,7 @@ func trimMatchingQuotes(value string) string {
 }
 
 type conditionIdentity struct {
+	stageID, inputScopeID, fieldBinding    string
 	field, operator, value, valueReference string
 	logicalOp, sourceField, alternatives   string
 	context                                PredicateContext
@@ -1711,12 +1728,26 @@ func identityOfCondition(condition Condition, budget *parseBudget) conditionIden
 		alternatives.WriteString(value)
 	}
 	return conditionIdentity{
-		field: condition.Field, operator: condition.Operator, value: condition.Value,
+		stageID: condition.StageID, inputScopeID: condition.InputScopeID,
+		fieldBinding: effectiveFieldBindingIdentity(condition.FieldBinding, condition.pendingFieldBinding),
+		field:        condition.Field, operator: condition.Operator, value: condition.Value,
 		context: condition.Context, lhs: operandIdentity(condition.LHS, budget), rhs: operandIdentity(condition.RHS, budget),
 		valueReference: condition.ValueReference, logicalOp: condition.LogicalOp,
 		sourceField: condition.SourceField, alternatives: alternatives.String(),
 		negated: condition.Negated, isComputed: condition.IsComputed, pipeStage: condition.PipeStage,
 	}
+}
+
+func fieldBindingIdentity(ref *FieldBindingRef) string {
+	if ref == nil {
+		return "0"
+	}
+	var builder strings.Builder
+	builder.WriteByte('1')
+	appendIdentityPart(&builder, ref.ScopeID)
+	appendIdentityPart(&builder, ref.Kind)
+	appendIdentityPart(&builder, ref.BindingID)
+	return builder.String()
 }
 
 func deduplicateConditions(conditions []Condition, budgets ...*parseBudget) []Condition {
@@ -1812,19 +1843,24 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	// Walk the tree to extract conditions
 	budget.step() // source-binding map allocation
 	extractor := &conditionExtractor{
-		budget:           budget,
-		conditions:       make([]Condition, 0),
-		conditionSources: make(conditionSourceBindings),
-		scalarRoots:      make(map[antlr.Tree]bool),
-		computedFields:   make(map[string]string), // computed field -> source field
-		fieldAliases:     make(map[string]string), // rename mappings: new name -> original name
-		commands:         make([]string, 0),
-		joins:            make([]JoinInfo, 0),
-		subsearches:      make([]*ParseResult, 0),
-		lastLogicalOp:    "AND", // default
-		tokenStream:      stream,
-		originalQuery:    query,
-		sourceMap:        sourceMap,
+		budget:            budget,
+		conditions:        make([]Condition, 0),
+		conditionSources:  make(conditionSourceBindings),
+		scalarRoots:       make(map[antlr.Tree]bool),
+		computedFields:    make(map[string]string), // computed field -> source field
+		fieldAliases:      make(map[string]string), // rename mappings: new name -> original name
+		commands:          make([]string, 0),
+		joins:             make([]JoinInfo, 0),
+		dataflowOwners:    []dataflowOwnerFrame{{OwnerID: 0, Selected: true}},
+		ownerByContext:    make(map[antlr.ParserRuleContext]int),
+		canonicalChildren: make(map[antlr.ParserRuleContext]string),
+		subsearches:       make([]*ParseResult, 0),
+		lastLogicalOp:     "AND", // default
+		tokenStream:       stream,
+		originalQuery:     query,
+		sourceMap:         sourceMap,
+		stageNumbers:      make(map[*PipelineStageContext]int),
+		subsearchIndices:  make(map[*SubsearchContext]int),
 	}
 	antlr.ParseTreeWalkerDefault.Walk(extractor, tree)
 	budget.check()
@@ -1833,6 +1869,14 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	// Combine errors
 	allErrors := append(lexerErrors.errors, parserErrors.errors...)
 	allErrors = append(allErrors, extractor.errors...)
+	var dataflow *QueryDataflow
+	var dataflowWarnings []string
+	if len(allErrors) == 0 {
+		dataflow, dataflowWarnings = newSPLDataflowBuilder(extractor).build(tree)
+		if dataflow == nil {
+			return &ParseResult{Conditions: []Condition{}, Commands: []string{}, Errors: []string{"dataflow source association failed"}}
+		}
+	}
 
 	// The raw tree proves which OR operands are atomic siblings. A flat
 	// LogicalOp sequence cannot distinguish a sibling from an AND subtree.
@@ -1895,6 +1939,7 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	}
 	budget.outputSize(len(conditions))
 	budget.check()
+	materializeConditionBindings(conditions, budget)
 
 	var warnings []string
 	if incomplete {
@@ -1906,7 +1951,9 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 		}
 		warnings = append(warnings, warning)
 	}
-	return &ParseResult{
+	warnings = append(warnings, dataflowWarnings...)
+	result = &ParseResult{
+		Dataflow:             dataflow,
 		ExpressionIncomplete: incomplete,
 		Warnings:             warnings,
 		Conditions:           conditions,
@@ -1920,6 +1967,13 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 		Subsearches:          extractor.subsearches,
 		Errors:               allErrors,
 	}
+	return finalizeSPLDataflowResult(result, budget)
+}
+
+func (e *conditionExtractor) EnterPipelineStage(ctx *PipelineStageContext) {
+	if e.ownsDataflow(ctx) {
+		e.stageNumbers[ctx] = e.currentStage
+	}
 }
 
 // ExitPipelineStage increments the stage counter after processing each stage
@@ -1932,15 +1986,21 @@ func (e *conditionExtractor) EnterSubsearch(ctx *SubsearchContext) {
 	if e.inSubsearch == 0 {
 		subText := strings.TrimSpace(e.extractSubsearchText(ctx))
 		if subText != "" {
+			e.subsearchIndices[ctx] = len(e.subsearches)
+			if _, canonical := e.canonicalChildren[ctx]; !canonical {
+				e.canonicalChildren[ctx] = "subsearches/" + strconv.Itoa(len(e.subsearches))
+			}
 			e.subsearches = append(e.subsearches, extractConditionsInternal(subText, e.budget))
 		}
 	}
+	e.enterDataflowOwner(ctx)
 	e.inSubsearch++
 }
 
 // ExitSubsearch tracks when we exit a subsearch
 func (e *conditionExtractor) ExitSubsearch(ctx *SubsearchContext) {
 	e.inSubsearch--
+	e.leaveDataflowOwner()
 }
 
 // extractSubsearchText extracts the raw query text inside a subsearch's brackets
@@ -1959,6 +2019,9 @@ func (e *conditionExtractor) extractSubsearchText(ctx *SubsearchContext) string 
 
 // EnterJoinCommand extracts join metadata and recursively parses the subsearch
 func (e *conditionExtractor) EnterJoinCommand(ctx *JoinCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "join")
 
 	info := JoinInfo{
@@ -1999,6 +2062,7 @@ func (e *conditionExtractor) EnterJoinCommand(ctx *JoinCommandContext) {
 
 	// Recursively parse the subsearch
 	if ctx.Subsearch() != nil {
+		e.canonicalChildren[ctx.Subsearch().(*SubsearchContext)] = "joins/" + strconv.Itoa(len(e.joins))
 		subText := e.extractSubsearchText(ctx.Subsearch().(*SubsearchContext))
 		if subText != "" {
 			info.Subsearch = extractConditionsInternal(subText, e.budget)
@@ -2011,6 +2075,9 @@ func (e *conditionExtractor) EnterJoinCommand(ctx *JoinCommandContext) {
 
 // EnterAppendCommand extracts append subsearch info
 func (e *conditionExtractor) EnterAppendCommand(ctx *AppendCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "append")
 
 	info := JoinInfo{
@@ -2020,6 +2087,7 @@ func (e *conditionExtractor) EnterAppendCommand(ctx *AppendCommandContext) {
 	}
 
 	if ctx.Subsearch() != nil {
+		e.canonicalChildren[ctx.Subsearch().(*SubsearchContext)] = "joins/" + strconv.Itoa(len(e.joins))
 		subText := e.extractSubsearchText(ctx.Subsearch().(*SubsearchContext))
 		if subText != "" {
 			info.Subsearch = extractConditionsInternal(subText, e.budget)
@@ -2088,12 +2156,10 @@ func ClassifyFieldProvenance(result *ParseResult, field string) FieldProvenance 
 		return ProvenanceAmbiguous
 	}
 
-	fieldLower := strings.ToLower(field)
-
 	// Check join keys first (they exist on both sides)
 	for _, j := range result.Joins {
 		for _, jf := range j.JoinFields {
-			if strings.ToLower(jf) == fieldLower {
+			if jf == field {
 				return ProvenanceJoinKey
 			}
 		}
@@ -2102,7 +2168,7 @@ func ClassifyFieldProvenance(result *ParseResult, field string) FieldProvenance 
 	// Check if field is in exposed fields from any join's subsearch
 	for _, j := range result.Joins {
 		for _, ef := range j.ExposedFields {
-			if strings.ToLower(ef) == fieldLower {
+			if ef == field {
 				return ProvenanceJoined
 			}
 		}
@@ -2117,14 +2183,14 @@ func ClassifyFieldProvenance(result *ParseResult, field string) FieldProvenance 
 	}
 
 	for _, c := range result.Conditions {
-		if strings.ToLower(c.Field) == fieldLower && c.PipeStage < firstJoinStage {
+		if c.Field == field && c.PipeStage < firstJoinStage {
 			return ProvenanceMain
 		}
 	}
 
 	// Field exists in conditions but after join — check if it's from main query scope
 	// by seeing if it appears in pre-join computed fields
-	if _, ok := result.ComputedFields[fieldLower]; ok {
+	if _, ok := result.ComputedFields[field]; ok {
 		return ProvenanceMain
 	}
 
@@ -2135,7 +2201,7 @@ func ClassifyFieldProvenance(result *ParseResult, field string) FieldProvenance 
 // represent. Other complete calls are retained by the scalar expression path.
 func (e *conditionExtractor) EnterFunctionCall(ctx *FunctionCallContext) {
 	e.inFunctionCall++
-	if e.scalarDepth > 0 || e.inSubsearch > 0 || e.inEvalCommand > 0 || e.inStatsFunction > 0 || e.inFunctionCall > 1 ||
+	if e.scalarDepth > 0 || !e.ownsDataflow(ctx) || e.inEvalCommand > 0 || e.inStatsFunction > 0 || e.inFunctionCall > 1 ||
 		!representedBareFunction(ctx, e.budget) {
 		return
 	}
@@ -2202,10 +2268,16 @@ func (e *conditionExtractor) EnterStatsFunction(ctx *StatsFunctionContext) {
 // filters (e.g. | where events > 5) are recognized as operating on computed fields.
 func (e *conditionExtractor) ExitStatsFunction(ctx *StatsFunctionContext) {
 	e.inStatsFunction--
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 
 	// If this stats function has an AS alias, register it as a computed field
-	if ctx.AS() != nil && ctx.FieldName() != nil {
-		alias := strings.ToLower(ctx.FieldName().GetText())
+	if ctx.AS() != nil && (ctx.FieldName() != nil || ctx.QUOTED_STRING() != nil) {
+		alias := splFieldName(ctx.FieldName())
+		if ctx.QUOTED_STRING() != nil {
+			alias = decodeSPLQuotedOperand(trimMatchingQuotes(ctx.QUOTED_STRING().GetText()))
+		}
 		// The source is the expression inside the function, or the function name itself
 		sourceField := ""
 		if ctx.Expression() != nil {
@@ -2215,13 +2287,13 @@ func (e *conditionExtractor) ExitStatsFunction(ctx *StatsFunctionContext) {
 			// For functions like count (no expression), use the function name as source marker
 			sourceField = strings.ToLower(ctx.IDENTIFIER().GetText())
 		}
-		e.computedFields[alias] = sourceField
+		if !unresolvedSPLFieldName(alias) {
+			e.computedFields[alias] = sourceField
+		}
 	}
 
-	if e.inSubsearch == 0 {
-		if aggregation, ok := newAggregation(ctx, e.currentStage); ok {
-			e.aggregations = append(e.aggregations, aggregation)
-		}
+	if aggregation, ok := newAggregation(ctx, e.currentStage); ok {
+		e.aggregations = append(e.aggregations, aggregation)
 	}
 }
 
@@ -2267,9 +2339,9 @@ func newAggregation(ctx *StatsFunctionContext, stage int) (Aggregation, bool) {
 	}
 	switch {
 	case ctx.FieldName() != nil:
-		column = ctx.FieldName().GetText()
+		column = splFieldName(ctx.FieldName())
 	case ctx.QUOTED_STRING() != nil:
-		column = strings.Trim(ctx.QUOTED_STRING().GetText(), `"'`)
+		column = decodeSPLQuotedOperand(trimMatchingQuotes(ctx.QUOTED_STRING().GetText()))
 	}
 	aggregation.Column = column
 	return aggregation, true
@@ -2277,6 +2349,9 @@ func newAggregation(ctx *StatsFunctionContext, stage int) (Aggregation, bool) {
 
 // EnterTstatsCommand extracts group-by fields, datamodel reference, and commands from tstats
 func (e *conditionExtractor) EnterTstatsCommand(ctx *TstatsCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "tstats")
 
 	// Extract BY/GROUPBY fields from fieldOrQuoted elements
@@ -2320,6 +2395,9 @@ func (e *conditionExtractor) EnterTstatsCommand(ctx *TstatsCommandContext) {
 
 // EnterMstatsCommand extracts group-by fields from mstats commands (metrics store)
 func (e *conditionExtractor) EnterMstatsCommand(ctx *MstatsCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "mstats")
 
 	// Extract BY/GROUPBY fields from fieldOrQuoted elements
@@ -2342,29 +2420,44 @@ func (e *conditionExtractor) EnterMstatsCommand(ctx *MstatsCommandContext) {
 
 // EnterInputlookupCommand extracts the command name for inputlookup
 func (e *conditionExtractor) EnterInputlookupCommand(ctx *InputlookupCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "inputlookup")
 }
 
 // EnterStatsCommand extracts group-by fields from stats commands
 func (e *conditionExtractor) EnterStatsCommand(ctx *StatsCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "stats")
 	e.extractByFields(ctx.FieldList())
 }
 
 // EnterEventstatsCommand extracts group-by fields from eventstats commands
 func (e *conditionExtractor) EnterEventstatsCommand(ctx *EventstatsCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "eventstats")
 	e.extractByFields(ctx.FieldList())
 }
 
 // EnterStreamstatsCommand extracts group-by fields from streamstats commands
 func (e *conditionExtractor) EnterStreamstatsCommand(ctx *StreamstatsCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "streamstats")
 	e.extractByFields(ctx.FieldList())
 }
 
 // EnterTimechartCommand extracts group-by fields from timechart commands
 func (e *conditionExtractor) EnterTimechartCommand(ctx *TimechartCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "timechart")
 	if ctx.FieldName() != nil {
 		field := ctx.FieldName().GetText()
@@ -2376,6 +2469,9 @@ func (e *conditionExtractor) EnterTimechartCommand(ctx *TimechartCommandContext)
 
 // EnterChartCommand extracts group-by fields from chart commands
 func (e *conditionExtractor) EnterChartCommand(ctx *ChartCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "chart")
 	e.extractByFields(ctx.FieldList())
 	// Also extract the OVER field if present
@@ -2416,23 +2512,35 @@ func (e *conditionExtractor) extractByFields(fieldList IFieldListContext) {
 
 // EnterDedupCommand extracts fields from dedup commands
 func (e *conditionExtractor) EnterDedupCommand(ctx *DedupCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.extractByFields(ctx.FieldList())
 }
 
 // EnterFieldsCommand extracts fields from fields commands (field selection)
 func (e *conditionExtractor) EnterFieldsCommand(ctx *FieldsCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "fields")
 	e.extractByFields(ctx.FieldList())
 }
 
 // EnterTableCommand extracts fields from table commands (display fields)
 func (e *conditionExtractor) EnterTableCommand(ctx *TableCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "table")
 	e.extractByFields(ctx.FieldList())
 }
 
 // EnterTopCommand extracts fields from top commands
 func (e *conditionExtractor) EnterTopCommand(ctx *TopCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	for _, fieldList := range ctx.AllFieldList() {
 		e.extractByFields(fieldList)
 	}
@@ -2441,6 +2549,9 @@ func (e *conditionExtractor) EnterTopCommand(ctx *TopCommandContext) {
 
 // EnterRareCommand extracts fields from rare commands
 func (e *conditionExtractor) EnterRareCommand(ctx *RareCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	for _, fieldList := range ctx.AllFieldList() {
 		e.extractByFields(fieldList)
 	}
@@ -2450,9 +2561,6 @@ func (e *conditionExtractor) EnterRareCommand(ctx *RareCommandContext) {
 // addValueCountAggregations records the count and percent columns that top
 // and rare output for each value.
 func (e *conditionExtractor) addValueCountAggregations(command string) {
-	if e.inSubsearch > 0 {
-		return
-	}
 	for _, column := range []string{"count", "percent"} {
 		e.aggregations = append(e.aggregations, Aggregation{Command: command, Function: column, Column: column, PipeStage: e.currentStage})
 	}
@@ -2460,6 +2568,9 @@ func (e *conditionExtractor) addValueCountAggregations(command string) {
 
 // EnterSortCommand extracts fields from sort commands
 func (e *conditionExtractor) EnterSortCommand(ctx *SortCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	for _, sortField := range ctx.AllSortField() {
 		if sortField.FieldName() != nil {
 			field := sortField.FieldName().GetText()
@@ -2473,12 +2584,18 @@ func (e *conditionExtractor) EnterSortCommand(ctx *SortCommandContext) {
 
 // EnterEvalCommand tracks eval commands
 func (e *conditionExtractor) EnterEvalCommand(ctx *EvalCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "eval")
 	e.inEvalCommand++
 }
 
 // ExitEvalCommand leaves eval command scope.
 func (e *conditionExtractor) ExitEvalCommand(ctx *EvalCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	if e.inEvalCommand > 0 {
 		e.inEvalCommand--
 	}
@@ -2486,12 +2603,18 @@ func (e *conditionExtractor) ExitEvalCommand(ctx *EvalCommandContext) {
 
 // EnterWhereCommand tracks where commands
 func (e *conditionExtractor) EnterWhereCommand(ctx *WhereCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "where")
 	e.inWhereCommand++
 }
 
 // ExitWhereCommand leaves where command scope.
 func (e *conditionExtractor) ExitWhereCommand(ctx *WhereCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	if e.inWhereCommand > 0 {
 		e.inWhereCommand--
 	}
@@ -2504,6 +2627,9 @@ func (e *conditionExtractor) ExitWhereCommand(ctx *WhereCommandContext) {
 // - closed_txn: 1 if the transaction was properly closed, 0 otherwise
 // These should not be expected in test data as they're computed by the command.
 func (e *conditionExtractor) EnterTransactionCommand(ctx *TransactionCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "transaction")
 
 	// Mark transaction-computed fields
@@ -2521,10 +2647,13 @@ func (e *conditionExtractor) EnterTransactionCommand(ctx *TransactionCommandCont
 // EnterRexCommand tracks rex commands and extracts computed fields from named capture groups
 // rex field=CommandLine "(?<script>[^\s]+\.ps1)" creates computed field "script" from "CommandLine"
 func (e *conditionExtractor) EnterRexCommand(ctx *RexCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "rex")
 
 	// Skip rex in subsearches
-	if e.inSubsearch > 0 {
+	if !e.ownsDataflow(ctx) {
 		return
 	}
 
@@ -2549,7 +2678,7 @@ func (e *conditionExtractor) EnterRexCommand(ctx *RexCommandContext) {
 
 		// Map each captured field to the source field
 		for _, captured := range captureGroups {
-			e.computedFields[strings.ToLower(captured)] = sourceField
+			e.computedFields[captured] = sourceField
 		}
 	}
 }
@@ -2557,9 +2686,12 @@ func (e *conditionExtractor) EnterRexCommand(ctx *RexCommandContext) {
 // EnterRenameCommand tracks rename commands: | rename OldField AS NewField
 // Records field aliases so downstream consumers can resolve renamed fields.
 func (e *conditionExtractor) EnterRenameCommand(ctx *RenameCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	e.commands = append(e.commands, "rename")
 
-	if e.inSubsearch > 0 {
+	if !e.ownsDataflow(ctx) {
 		return
 	}
 
@@ -2572,13 +2704,13 @@ func (e *conditionExtractor) EnterRenameCommand(ctx *RenameCommandContext) {
 			if len(fields) >= 2 {
 				newName = fields[1].GetText()
 			} else if spec.QUOTED_STRING() != nil {
-				newName = strings.Trim(spec.QUOTED_STRING().GetText(), "\"'")
+				newName = decodeSPLQuotedOperand(trimMatchingQuotes(spec.QUOTED_STRING().GetText()))
 			}
 			if newName != "" && oldName != "" {
-				e.fieldAliases[strings.ToLower(newName)] = oldName
+				e.fieldAliases[newName] = oldName
 				// Also track as computed field so downstream conditions
 				// on the renamed field are marked as computed.
-				e.computedFields[strings.ToLower(newName)] = oldName
+				e.computedFields[newName] = oldName
 			}
 		}
 	}
@@ -2620,13 +2752,16 @@ func extractNamedCaptureGroups(pattern string) []string {
 // EnterEvalAssignment tracks computed fields from eval commands
 func (e *conditionExtractor) EnterEvalAssignment(ctx *EvalAssignmentContext) {
 	// Skip eval assignments in subsearches
-	if e.inSubsearch > 0 {
+	if !e.ownsDataflow(ctx) {
 		return
 	}
 
-	// Extract the field name being assigned to and try to find the source field
-	if ctx.FieldName() != nil {
-		computedField := ctx.FieldName().GetText()
+	// Extract the exact decoded output name; quoted names are ordinary fields.
+	computedField := splFieldName(ctx.FieldName())
+	if ctx.QUOTED_STRING() != nil {
+		computedField = decodeSPLQuotedOperand(trimMatchingQuotes(ctx.QUOTED_STRING().GetText()))
+	}
+	if !unresolvedSPLFieldName(computedField) {
 		sourceField := ""
 
 		// Try to extract the source field from the expression
@@ -2635,7 +2770,7 @@ func (e *conditionExtractor) EnterEvalAssignment(ctx *EvalAssignmentContext) {
 			sourceField = extractFirstFieldFromExpression(ctx.Expression())
 		}
 
-		e.computedFields[strings.ToLower(computedField)] = sourceField
+		e.computedFields[computedField] = sourceField
 	}
 }
 
@@ -2766,7 +2901,7 @@ func startsWithDigit(s string) bool {
 // and wildcard patterns in the same representation as quoted keywords.
 func (e *conditionExtractor) EnterBareWord(ctx *BareWordContext) {
 	// Skip inside subsearches
-	if e.inSubsearch > 0 || !bareWordIsSearchPredicate(ctx, e.budget) {
+	if !e.ownsDataflow(ctx) || !bareWordIsSearchPredicate(ctx, e.budget) {
 		return
 	}
 
@@ -2811,7 +2946,7 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 		return
 	}
 	// Skip conditions inside subsearches (like join)
-	if e.inSubsearch > 0 {
+	if !e.ownsDataflow(ctx) {
 		return
 	}
 
@@ -2861,7 +2996,6 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 			if lhs.Kind != OperandField && rhs.Kind == OperandField {
 				lhs, rhs = rhs, lhs
 				field = lhs.Value
-				fieldLower = strings.ToLower(field)
 				op = invertComparison(op)
 			}
 			switch rhs.Kind {
@@ -2875,7 +3009,7 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 		}
 
 		// Check if this is a computed field and get its source field
-		sourceField, isComputed := e.computedFields[fieldLower]
+		sourceField, isComputed := e.computedFields[field]
 
 		cond := Condition{
 			Field:          field,
@@ -2918,7 +3052,7 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 		}
 
 		// Check if this is a computed field and get its source field
-		sourceField, isComputed := e.computedFields[fieldLower]
+		sourceField, isComputed := e.computedFields[field]
 
 		values := extractValueList(ctx.ValueList())
 		items := make([]Operand, 0, len(ctx.ValueList().AllValue()))
@@ -2953,7 +3087,7 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 }
 
 func (e *conditionExtractor) EnterComparisonExpression(ctx *ComparisonExpressionContext) {
-	if e.inSubsearch > 0 || e.inEvalCommand > 0 || e.inStatsFunction > 0 || e.inFunctionCall > 0 || e.scalarDepth > 0 ||
+	if !e.ownsDataflow(ctx) || e.inEvalCommand > 0 || e.inStatsFunction > 0 || e.inFunctionCall > 0 || e.scalarDepth > 0 ||
 		predicateContextFor(ctx, e.budget) != PredicateEval {
 		return
 	}
@@ -2984,7 +3118,7 @@ func (e *conditionExtractor) EnterComparisonExpression(ctx *ComparisonExpression
 		if rhs.Kind == OperandField {
 			value, reference = "", rhs.Value
 		}
-		sourceField, computed := e.computedFields[strings.ToLower(field)]
+		sourceField, computed := e.computedFields[field]
 		e.appendSourcedCondition(Condition{Field: field, Context: PredicateEval, LHS: lhs, RHS: rhs,
 			Operator: op, Value: value, ValueReference: reference, Negated: e.negated,
 			PipeStage: e.currentStage, LogicalOp: e.lastLogicalOp, IsComputed: computed, SourceField: sourceField}, ctx)
@@ -3055,6 +3189,9 @@ func (e *conditionExtractor) authoredComparisonOperator(op string, operatorStart
 
 // EnterNotExpression tracks negation
 func (e *conditionExtractor) EnterNotExpression(ctx *NotExpressionContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	if ctx.NOT() != nil {
 		e.negated = !e.negated
 	}
@@ -3062,6 +3199,9 @@ func (e *conditionExtractor) EnterNotExpression(ctx *NotExpressionContext) {
 
 // ExitNotExpression resets negation
 func (e *conditionExtractor) ExitNotExpression(ctx *NotExpressionContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	if ctx.NOT() != nil {
 		e.negated = !e.negated
 	}
@@ -3069,6 +3209,9 @@ func (e *conditionExtractor) ExitNotExpression(ctx *NotExpressionContext) {
 
 // EnterSearchTerm handles NOT in search terms
 func (e *conditionExtractor) EnterSearchTerm(ctx *SearchTermContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	if ctx.NOT() != nil {
 		e.negated = !e.negated
 	}
@@ -3076,6 +3219,9 @@ func (e *conditionExtractor) EnterSearchTerm(ctx *SearchTermContext) {
 
 // ExitSearchTerm resets negation for search terms
 func (e *conditionExtractor) ExitSearchTerm(ctx *SearchTermContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	if ctx.NOT() != nil {
 		e.negated = !e.negated
 	}
@@ -3083,6 +3229,9 @@ func (e *conditionExtractor) ExitSearchTerm(ctx *SearchTermContext) {
 
 // EnterLogicalOp tracks the logical operator
 func (e *conditionExtractor) EnterLogicalOp(ctx *LogicalOpContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
 	if ctx.OR() != nil {
 		e.lastLogicalOp = "OR"
 	} else {
@@ -3251,7 +3400,8 @@ func sameConditionGroup(a, b Condition) bool {
 		a.ValueReference != "" || b.ValueReference != "" || a.Field == "" || a.Operator == "" {
 		return false
 	}
-	if a.Field != b.Field || a.Operator != b.Operator || a.PipeStage != b.PipeStage || a.SourceField != b.SourceField {
+	if a.Field != b.Field || a.Operator != b.Operator || a.PipeStage != b.PipeStage || a.SourceField != b.SourceField ||
+		a.StageID != b.StageID || a.InputScopeID != b.InputScopeID || effectiveFieldBindingIdentity(a.FieldBinding, a.pendingFieldBinding) != effectiveFieldBindingIdentity(b.FieldBinding, b.pendingFieldBinding) {
 		return false
 	}
 	if a.Context != b.Context || operandIdentity(a.LHS, nil) != operandIdentity(b.LHS, nil) ||
@@ -3300,9 +3450,9 @@ func likePatternKind(pattern string) string {
 
 func conditionDedupKey(cond Condition) string {
 	var builder strings.Builder
-	for _, part := range []string{strings.ToLower(cond.Field), cond.Operator, cond.Value, cond.ValueReference,
+	for _, part := range []string{cond.Field, cond.Operator, cond.Value, cond.ValueReference,
 		string(cond.Context), operandIdentity(cond.LHS, nil), operandIdentity(cond.RHS, nil),
-		boolKey(cond.Negated), boolKey(cond.IsComputed), strings.ToLower(cond.SourceField)} {
+		boolKey(cond.Negated), boolKey(cond.IsComputed), cond.SourceField, cond.StageID, cond.InputScopeID, effectiveFieldBindingIdentity(cond.FieldBinding, cond.pendingFieldBinding)} {
 		appendIdentityPart(&builder, part)
 	}
 	for _, value := range cond.Alternatives {
@@ -3324,7 +3474,7 @@ func DeduplicateConditions(conditions []Condition) []Condition {
 		return conditions
 	}
 
-	// Group by field (case-insensitive)
+	// Keep exact field identity when choosing the latest compatibility stage.
 	fieldConditions := make(map[string][]Condition)
 	for _, cond := range conditions {
 		// Skip pure wildcards
@@ -3332,7 +3482,7 @@ func DeduplicateConditions(conditions []Condition) []Condition {
 			continue
 		}
 		var fieldKey strings.Builder
-		appendIdentityPart(&fieldKey, strings.ToLower(cond.Field))
+		appendIdentityPart(&fieldKey, cond.Field)
 		appendIdentityPart(&fieldKey, string(cond.Context))
 		key := fieldKey.String()
 		fieldConditions[key] = append(fieldConditions[key], cond)
@@ -3359,6 +3509,7 @@ func DeduplicateConditions(conditions []Condition) []Condition {
 					seen[key] = true
 					cond.LHS = cloneOperand(cond.LHS, nil)
 					cond.RHS = cloneOperand(cond.RHS, nil)
+					cond.FieldBinding = cloneFieldBindingRef(cond.FieldBinding, nil)
 					cond.Alternatives = append([]string(nil), cond.Alternatives...)
 					result = append(result, cond)
 				}

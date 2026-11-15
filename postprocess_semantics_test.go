@@ -95,6 +95,7 @@ func requireSemanticAndLeaves(t *testing.T, query string, want []Condition, leaf
 func legacyConditions(conditions []Condition) []Condition {
 	legacy := append([]Condition(nil), conditions...)
 	for i := range legacy {
+		legacy[i].StageID, legacy[i].InputScopeID, legacy[i].FieldBinding = "", "", nil
 		legacy[i].Context, legacy[i].LHS, legacy[i].RHS = "", nil, nil
 	}
 	return legacy
