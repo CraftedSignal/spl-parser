@@ -575,7 +575,15 @@ func extractPortableSPLConditionsDepth(normalized string, depth int, budget *par
 	conditions = budget.appendConditions(conditions, extractLDAPSearchConditions(normalized, budget)...)
 	conditions = budget.appendConditions(conditions, extractDatasetPowerQueryConditions(normalized, budget)...)
 	conditions = budget.appendConditions(conditions, extractQuotedSearchOptionConditions(normalized, depth, budget)...)
-	conditions = budget.appendConditions(conditions, extractSubsearchConditions(normalized, depth, budget)...)
+	for _, segment := range splitSPLPipelineSegments(normalized) {
+		budget.step()
+
+		// A join or append subsearch filters its own rows, as JoinInfo records.
+		if trimmed := strings.TrimSpace(segment); hasWordAt(trimmed, 0, "join") || hasWordAt(trimmed, 0, "append") {
+			continue
+		}
+		conditions = budget.appendConditions(conditions, extractSubsearchConditions(segment, depth, budget)...)
+	}
 	return deduplicateConditions(conditions, budget)
 }
 
@@ -1931,6 +1939,8 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	}
 	if recoveredWithPortableExtraction && !containsScalarExpression(expression) {
 		allErrors = nil
+		// The regex recovery cannot vouch for the syntax the grammar rejected.
+		incomplete = true
 	}
 
 	for i := range conditions {
