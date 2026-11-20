@@ -3698,7 +3698,12 @@ func FirstJoinOrSubsearchStage(query string) int {
 // classifyStage determines the command type of a pipeline stage by checking
 // which typed child context is non-nil.
 func classifyStage(stage IPipelineStageContext) string {
-	if stage.SearchCommand() != nil {
+	if search := stage.SearchCommand(); search != nil {
+		// Search is implied only in the first stage; a later command
+		// without a rule of its own parses as a search but is generic.
+		if implicitPipelineCommand(search, nil) {
+			return "generic"
+		}
 		return "search"
 	}
 	if stage.WhereCommand() != nil {
