@@ -235,6 +235,18 @@ func (l *errorListener) SyntaxError(recognizer antlr.Recognizer, offendingSymbol
 	}
 }
 
+// hasUnparsedTail reports whether tokens follow the parsed query. The root rule
+// reports them as a syntax error and skips them, so the stages they hold are
+// missing from the tree.
+func hasUnparsedTail(root IRootContext) bool {
+	for _, child := range root.GetChildren() {
+		if _, ok := child.(antlr.ErrorNode); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // nativeWhereBoundaryError uses the existing parser's rule stack and offending
 // token to distinguish a missing where operand/group from portable syntax.
 func nativeWhereBoundaryError(parser *antlr.BaseParser, offendingSymbol interface{}, budget *parseBudget) bool {
@@ -1828,7 +1840,9 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	parser.AddErrorListener(parserErrors)
 
 	// Parse the query
-	tree := parser.Query()
+	root := parser.Root()
+	tree := root.Query()
+	unparsed := hasUnparsedTail(root)
 	if parserErrors.truncatedNativeWherePredicate {
 		budget.check()
 		allErrors := append(lexerErrors.errors, parserErrors.errors...)
@@ -1887,7 +1901,7 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 		rawConditions = append(rawConditions, condition)
 	}
 	unsupportedSearchOperand := hasUnsupportedSearchOperand(tree, budget)
-	incomplete := unsupportedSearchOperand
+	incomplete := unsupportedSearchOperand || unparsed
 	var rawExpression *ConditionExpression
 	if !incomplete {
 		var missingAtom bool
@@ -1948,6 +1962,9 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 		warning := "boolean expression unavailable: query contains an unsupported or unrepresented boolean operand"
 		if unsupportedSearchOperand {
 			warning = "boolean expression unavailable: search contains an unsupported macro or subsearch operand"
+		}
+		if unparsed {
+			warning = "boolean expression unavailable: the parser stopped before the end of the query"
 		}
 		warnings = append(warnings, warning)
 	}
@@ -3622,6 +3639,8 @@ func ClassifyPipelineStages(query string) []PipelineStageInfo {
 }
 
 // ClassifyPipelineStagesContext reports cancellation and limit rejection.
+// Like ClassifyPipelineStages, it returns nil stages and no error when the
+// grammar cannot parse the whole query.
 func ClassifyPipelineStagesContext(ctx context.Context, query string) ([]PipelineStageInfo, error) {
 	return classifyPipelineStagesContext(ctx, query, defaultParseLimits())
 }
@@ -3644,10 +3663,13 @@ func classifyPipelineStagesInternal(query string, budget *parseBudget) []Pipelin
 	parser := NewSPLParser(&budgetTokenStream{CommonTokenStream: stream, budget: budget})
 	parser.RemoveErrorListeners()
 
-	tree := parser.Query()
+	root := parser.Root()
 
 	budget.check()
-	stages := tree.AllPipelineStage()
+	if hasUnparsedTail(root) {
+		return nil
+	}
+	stages := root.Query().AllPipelineStage()
 	budget.outputSize(len(stages))
 	infos := make([]PipelineStageInfo, len(stages))
 

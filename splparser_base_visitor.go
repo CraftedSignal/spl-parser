@@ -7,6 +7,10 @@ type BaseSPLParserVisitor struct {
 	*antlr.BaseParseTreeVisitor
 }
 
+func (v *BaseSPLParserVisitor) VisitRoot(ctx *RootContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitQuery(ctx *QueryContext) interface{} {
 	return v.VisitChildren(ctx)
 }

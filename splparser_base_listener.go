@@ -20,6 +20,12 @@ func (s *BaseSPLParserListener) EnterEveryRule(ctx antlr.ParserRuleContext) {}
 // ExitEveryRule is called when any rule is exited.
 func (s *BaseSPLParserListener) ExitEveryRule(ctx antlr.ParserRuleContext) {}
 
+// EnterRoot is called when production root is entered.
+func (s *BaseSPLParserListener) EnterRoot(ctx *RootContext) {}
+
+// ExitRoot is called when production root is exited.
+func (s *BaseSPLParserListener) ExitRoot(ctx *RootContext) {}
+
 // EnterQuery is called when production query is entered.
 func (s *BaseSPLParserListener) EnterQuery(ctx *QueryContext) {}
 

@@ -7,6 +7,9 @@ import "github.com/antlr4-go/antlr/v4"
 type SPLParserVisitor interface {
 	antlr.ParseTreeVisitor
 
+	// Visit a parse tree produced by SPLParser#root.
+	VisitRoot(ctx *RootContext) interface{}
+
 	// Visit a parse tree produced by SPLParser#query.
 	VisitQuery(ctx *QueryContext) interface{}
 

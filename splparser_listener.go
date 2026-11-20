@@ -7,6 +7,9 @@ import "github.com/antlr4-go/antlr/v4"
 type SPLParserListener interface {
 	antlr.ParseTreeListener
 
+	// EnterRoot is called when entering the root production.
+	EnterRoot(c *RootContext)
+
 	// EnterQuery is called when entering the query production.
 	EnterQuery(c *QueryContext)
 
@@ -270,6 +273,9 @@ type SPLParserListener interface {
 
 	// EnterValueList is called when entering the valueList production.
 	EnterValueList(c *ValueListContext)
+
+	// ExitRoot is called when exiting the root production.
+	ExitRoot(c *RootContext)
 
 	// ExitQuery is called when exiting the query production.
 	ExitQuery(c *QueryContext)

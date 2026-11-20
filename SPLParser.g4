@@ -2,7 +2,12 @@ parser grammar SPLParser;
 
 options { tokenVocab=SPLLexer; }
 
-// Entry point
+// Entry point: a query must span the whole input. subsearch reuses query
+// inside brackets, so the end-of-input check lives in its own rule.
+root
+    : query EOF
+    ;
+
 // Queries can optionally start with | for generating commands like tstats, inputlookup
 query
     : PIPE? pipelineStage (PIPE pipelineStage)*
