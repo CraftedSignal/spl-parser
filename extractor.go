@@ -3640,7 +3640,10 @@ func classifyPipelineStagesContext(ctx context.Context, query string, limits par
 
 func classifyPipelineStagesInternal(query string, budget *parseBudget) []PipelineStageInfo {
 	budget.input(query)
-	stream := preflight(query, budget, true, nil)
+	preflight(query, budget, false, nil)
+	normalizedQuery, sourceMap := normalizeSPLQueryMapped(query, budget)
+	budget.input(normalizedQuery)
+	stream := preflight(normalizedQuery, budget, true, nil)
 	parser := NewSPLParser(&budgetTokenStream{CommonTokenStream: stream, budget: budget})
 	parser.RemoveErrorListeners()
 
@@ -3656,15 +3659,15 @@ func classifyPipelineStagesInternal(query string, budget *parseBudget) []Pipelin
 		cmdType := classifyStage(stage)
 
 		// Extract original text with whitespace from the query string using
-		// ANTLR token positions, since GetText() strips whitespace.
+		// ANTLR token positions, since GetText() strips whitespace. The
+		// positions are runes of the normalized query; the source map
+		// returns the authored bytes.
 		originalText := stage.GetText()
 		startToken := stage.GetStart()
 		stopToken := stage.GetStop()
 		if startToken != nil && stopToken != nil {
-			start := startToken.GetStart()
-			stop := stopToken.GetStop()
-			if start >= 0 && stop >= start && stop < len(query) {
-				originalText = query[start : stop+1]
+			if source := sourceMap.source(startToken.GetStart(), stopToken.GetStop()); source != "" {
+				originalText = source
 			}
 		}
 
