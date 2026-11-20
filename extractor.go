@@ -563,10 +563,12 @@ func extractPortableSPLConditionsDepth(normalized string, depth int, budget *par
 	}
 
 	var conditions []Condition
+	// After a leading pipe the first segment is a command, not the base search.
+	leadingPipe := strings.HasPrefix(strings.TrimSpace(normalized), "|")
 	for stage, segment := range splitSPLPipelineSegments(normalized) {
 		budget.step()
 
-		text, ok := portablePredicateSegment(segment, stage == 0)
+		text, ok := portablePredicateSegment(segment, stage == 0 && !leadingPipe)
 		if !ok {
 			continue
 		}
@@ -615,7 +617,11 @@ func splitSPLPipelineSegments(query string) []string {
 			}
 		case '|':
 			if bracketDepth == 0 && parenDepth == 0 {
-				segments = append(segments, query[start:i])
+				// A leading pipe opens the first command, so the blank text
+				// before it is no stage, as in the parser's numbering.
+				if len(segments) > 0 || strings.TrimSpace(query[start:i]) != "" {
+					segments = append(segments, query[start:i])
+				}
 				start = i + 1
 			}
 		}
@@ -1107,10 +1113,11 @@ func extractEmbeddedPredicateConditions(text string, stage int, budget *parseBud
 
 	var conditions []Condition
 	segments := splitSPLPipelineSegments(text)
+	leadingPipe := strings.HasPrefix(strings.TrimSpace(text), "|")
 	for idx, segment := range segments {
 		budget.step()
 
-		if predicateText, ok := embeddedPredicateSegment(segment, idx == 0); ok {
+		if predicateText, ok := embeddedPredicateSegment(segment, idx == 0 && !leadingPipe); ok {
 			conditions = budget.appendConditions(conditions, extractPortablePredicatesFromText(predicateText, stage, budget)...)
 		}
 	}
