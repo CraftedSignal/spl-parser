@@ -192,7 +192,8 @@ type conditionExtractor struct {
 	commands          []string          // Commands used in the query (stats, eventstats, etc.)
 	joins             []JoinInfo        // Extracted join info
 	subsearches       []*ParseResult    // Direct subsearch parse results
-	currentStage      int
+	currentStage      int               // PipeStage of the owned stage being walked
+	nextStage         int               // advanced by every stage, subsearch stages included
 	stageNumbers      map[*PipelineStageContext]int
 	subsearchIndices  map[*SubsearchContext]int
 	dataflowOwners    []dataflowOwnerFrame
@@ -1972,13 +1973,15 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 
 func (e *conditionExtractor) EnterPipelineStage(ctx *PipelineStageContext) {
 	if e.ownsDataflow(ctx) {
+		e.currentStage = e.nextStage
 		e.stageNumbers[ctx] = e.currentStage
 	}
 }
 
-// ExitPipelineStage increments the stage counter after processing each stage
+// ExitPipelineStage increments the stage counter after processing each stage.
+// A subsearch's stages advance it too, but leave currentStage to their owner.
 func (e *conditionExtractor) ExitPipelineStage(ctx *PipelineStageContext) {
-	e.currentStage++
+	e.nextStage++
 }
 
 // EnterSubsearch tracks when we enter a subsearch
