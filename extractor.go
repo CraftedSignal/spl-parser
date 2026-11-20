@@ -3805,6 +3805,9 @@ func classifyStage(stage IPipelineStageContext) string {
 
 // GetEventTypeFromConditions detects Windows Event types based on EventCode/EventID conditions
 // Returns event type strings like "windows_4688", "sysmon_1", etc.
+// Only positive equalities (=, ==, IN) count: negated conditions, != and range
+// comparisons do not select events. When several EventCode or EventID
+// conditions qualify, the first one wins.
 func GetEventTypeFromConditions(result *ParseResult) string {
 	if result == nil {
 		return ""
@@ -3813,10 +3816,13 @@ func GetEventTypeFromConditions(result *ParseResult) string {
 	var hasSysmon bool
 
 	for _, cond := range result.Conditions {
+		if cond.Negated || (cond.Operator != "=" && cond.Operator != "==" && cond.Operator != "in") {
+			continue
+		}
 		fieldLower := strings.ToLower(cond.Field)
 
 		// Check for EventCode or EventID
-		if fieldLower == "eventcode" || fieldLower == "eventid" {
+		if (fieldLower == "eventcode" || fieldLower == "eventid") && eventCode == "" {
 			eventCode = cond.Value
 		}
 
