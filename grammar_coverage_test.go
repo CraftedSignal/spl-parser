@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/antlr4-go/antlr/v4"
 )
 
 // The root rule requires a query to span the whole input. Tokens after the last
@@ -87,6 +89,9 @@ func TestWildcardValueEndsAtWhitespace(t *testing.T) {
 		{`fail* user=bob`, []ExpectedCondition{{"_raw", "contains", "fail*"}, {"user", "=", "bob"}}},
 	} {
 		r := ExtractConditions(tc.query)
+		if errs := syntaxErrors(tc.query); len(errs) != 0 {
+			t.Errorf("%s: syntax errors %q", tc.query, errs)
+		}
 		if len(r.Errors) != 0 || r.ExpressionIncomplete || len(r.Conditions) != len(tc.want) {
 			t.Errorf("%s: errors=%q incomplete=%v conditions=%s", tc.query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
 			continue
@@ -95,6 +100,20 @@ func TestWildcardValueEndsAtWhitespace(t *testing.T) {
 			assertHasCondition(t, r.Conditions, want)
 		}
 	}
+}
+
+// syntaxErrors parses query as ExtractConditions does and returns the
+// grammar's syntax errors, which the regex fallback would otherwise hide.
+func syntaxErrors(query string) []string {
+	lexer := NewSPLLexer(antlr.NewInputStream(normalizeSPLQuery(query)))
+	lexer.RemoveErrorListeners()
+	listener := &errorListener{}
+	lexer.AddErrorListener(listener)
+	parser := NewSPLParser(antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel))
+	parser.RemoveErrorListeners()
+	parser.AddErrorListener(listener)
+	parser.Root()
+	return listener.errors
 }
 
 func hasCondition(conditions []Condition, field, operator, value string) bool {
@@ -122,6 +141,9 @@ func TestBareValueKeepsPunctuation(t *testing.T) {
 		{`index=x host=prod-* status=500`, []ExpectedCondition{{"index", "=", "x"}, {"host", "=", "prod-*"}, {"status", "=", "500"}}},
 	} {
 		r := ExtractConditions(tc.query)
+		if errs := syntaxErrors(tc.query); len(errs) != 0 {
+			t.Errorf("%s: syntax errors %q", tc.query, errs)
+		}
 		if len(r.Errors) != 0 || r.ExpressionIncomplete || len(r.Conditions) != len(tc.want) {
 			t.Errorf("%s: errors=%q incomplete=%v conditions=%s", tc.query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
 			continue
@@ -145,6 +167,9 @@ func TestUnquotedIPv4AndCIDRValues(t *testing.T) {
 		{`index=main src_ip IN (10.0.0.1, 192.168.0.0/16)`, []ExpectedCondition{{"index", "=", "main"}, {"src_ip", "in", "10.0.0.1"}}},
 	} {
 		r := ExtractConditions(tc.query)
+		if errs := syntaxErrors(tc.query); len(errs) != 0 {
+			t.Errorf("%s: syntax errors %q", tc.query, errs)
+		}
 		if len(r.Errors) != 0 || r.ExpressionIncomplete || len(r.Conditions) != len(tc.want) {
 			t.Errorf("%s: errors=%q incomplete=%v conditions=%s", tc.query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
 			continue
@@ -174,6 +199,9 @@ func TestCommandNameAsValueOrFieldName(t *testing.T) {
 		{`index=x type=top mode=head format=json`, []ExpectedCondition{{"index", "=", "x"}, {"type", "=", "top"}, {"mode", "=", "head"}, {"format", "=", "json"}}},
 	} {
 		r := ExtractConditions(tc.query)
+		if errs := syntaxErrors(tc.query); len(errs) != 0 {
+			t.Errorf("%s: syntax errors %q", tc.query, errs)
+		}
 		if len(r.Errors) != 0 || r.ExpressionIncomplete || len(r.Conditions) != len(tc.want) {
 			t.Errorf("%s: errors=%q incomplete=%v conditions=%s", tc.query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
 			continue
@@ -212,13 +240,8 @@ func TestOperatorKeywordValueNeedsQuotes(t *testing.T) {
 		`index=x country=IN`: true, `index=x country=AS`: true, `index=x state=OR`: true, `index=x a=by`: true,
 		`index=x country="IN"`: false, `index=x state="OR"`: false,
 	} {
-		parser := splParserForTest(t, query)
-		parser.RemoveErrorListeners()
-		listener := &errorListener{}
-		parser.AddErrorListener(listener)
-		parser.Root()
-		if got := len(listener.errors) > 0; got != wantErrors {
-			t.Errorf("%s: syntax errors %q, want errors=%v", query, listener.errors, wantErrors)
+		if errs := syntaxErrors(query); (len(errs) > 0) != wantErrors {
+			t.Errorf("%s: syntax errors %q, want errors=%v", query, errs, wantErrors)
 		}
 	}
 }
@@ -236,6 +259,9 @@ func TestDigitLeadingBareValue(t *testing.T) {
 		{`index=x 7z.exe status=ok earliest=-5m`, []ExpectedCondition{{"index", "=", "x"}, {"_raw", "contains", "7z.exe"}, {"status", "=", "ok"}}},
 	} {
 		r := ExtractConditions(tc.query)
+		if errs := syntaxErrors(tc.query); len(errs) != 0 {
+			t.Errorf("%s: syntax errors %q", tc.query, errs)
+		}
 		if len(r.Errors) != 0 || r.ExpressionIncomplete || len(r.Conditions) != len(tc.want) {
 			t.Errorf("%s: errors=%q incomplete=%v conditions=%s", tc.query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
 			continue
@@ -253,6 +279,9 @@ func TestRelativeTimeUnits(t *testing.T) {
 	for _, modifier := range []string{"-2hours", "-15min", "-30days", "-1mon", "-10sec", "-1qtr", "-2years", "-7d@w1", "-1mon@mon", "-500ms"} {
 		query := `index=x earliest=` + modifier + ` user=bob`
 		r := ExtractConditions(query)
+		if errs := syntaxErrors(query); len(errs) != 0 {
+			t.Errorf("%s: syntax errors %q", query, errs)
+		}
 		if len(r.Errors) != 0 || r.ExpressionIncomplete || len(r.Conditions) != 2 {
 			t.Errorf("%s: errors=%q incomplete=%v conditions=%s", query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
 			continue
@@ -277,6 +306,9 @@ func TestWhereComparisonWithFunctionCall(t *testing.T) {
 		{`index=x | where a=mvindex(b,0)`, []string{"a=mvindex(b,0)"}, []ExpectedCondition{{"index", "=", "x"}}},
 	} {
 		r := ExtractConditions(tc.query)
+		if errs := syntaxErrors(tc.query); len(errs) != 0 {
+			t.Errorf("%s: syntax errors %q", tc.query, errs)
+		}
 		if len(r.Errors) != 0 || r.ExpressionIncomplete || len(r.Conditions) != len(tc.conditions) {
 			t.Errorf("%s: errors=%q incomplete=%v conditions=%s", tc.query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
 			continue
@@ -333,10 +365,13 @@ func TestWhereXORIsReportedIncomplete(t *testing.T) {
 	}
 }
 
-// assertNativeParse requires a complete native parse of query: no errors, no
-// incomplete flag, the `where marker=1` stage extracted, and the stage types.
+// assertNativeParse requires a complete native parse of query: no syntax
+// errors, no incomplete flag, the `where marker=1` stage, and the stage types.
 func assertNativeParse(t *testing.T, query string, stageTypes ...string) {
 	t.Helper()
+	if errs := syntaxErrors(query); len(errs) != 0 {
+		t.Errorf("%s: syntax errors %q", query, errs)
+	}
 	r := ExtractConditions(query)
 	if len(r.Errors) != 0 || r.ExpressionIncomplete || !hasCondition(r.Conditions, "marker", "=", "1") {
 		t.Errorf("%s: errors=%q incomplete=%v conditions=%s", query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
