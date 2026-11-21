@@ -2562,7 +2562,10 @@ func (e *conditionExtractor) EnterFieldsCommand(ctx *FieldsCommandContext) {
 		return
 	}
 	e.commands = append(e.commands, "fields")
-	e.extractByFields(ctx.FieldList())
+	// `fields - x` removes x; only a kept list names fields the stage outputs.
+	if ctx.MINUS() == nil {
+		e.extractByFields(ctx.FieldList())
+	}
 }
 
 // EnterTableCommand extracts fields from table commands (display fields)
