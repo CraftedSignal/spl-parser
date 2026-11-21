@@ -33,16 +33,16 @@ func TestRecoveredExtractionReportsWhatItMisses(t *testing.T) {
 		query                  string
 		field, operator, value string
 	}{
-		{`index=_audit action=search "failed login" user=bob`, "_raw", "contains", "failed login"},
-		{`index=_audit action=search | where like(user, "adm%")`, "user", "", ""},
-		{`index=_audit action=search | stats count by user | where count>5`, "count", ">", "5"},
+		{`index=_audit action=IN "failed login" user=bob`, "_raw", "contains", "failed login"},
+		{`index=_audit action=IN | where like(user, "adm%")`, "user", "", ""},
+		{`index=_audit action=IN | stats count by user | where count>5`, "count", ">", "5"},
 	} {
 		if result := ExtractConditions(tc.query); !has(result, tc.field, tc.operator, tc.value) && !reported(result) {
 			t.Errorf("%s: the %s predicate is lost and nothing reports it: %q", tc.query, tc.field, list(result))
 		}
 	}
 
-	query := `index=_audit action=search NOT (info=granted OR info=completed)`
+	query := `index=_audit action=IN NOT (info=granted OR info=completed)`
 	if result := ExtractConditions(query); result.Expression == nil && !reported(result) {
 		t.Errorf("%s: no Expression and nothing reports it; the flat list reads NOT a OR NOT b: %q", query, list(result))
 	}
@@ -50,7 +50,7 @@ func TestRecoveredExtractionReportsWhatItMisses(t *testing.T) {
 		t.Errorf("%s: AnalyzeQuery built an expression from the flat recovered list", query)
 	}
 
-	query = `index=_audit action=search | join user [search index=b status=failed]`
+	query = `index=_audit action=IN | join user [search index=b status=failed]`
 	if result := ExtractConditions(query); has(result, "status", "=", "failed") {
 		t.Errorf("%s: the join subsearch's status=failed is listed as a main-query condition: %q", query, list(result))
 	}
