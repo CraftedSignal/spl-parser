@@ -67,11 +67,17 @@ type SPLParserListener interface {
 	// EnterHeadCommand is called when entering the headCommand production.
 	EnterHeadCommand(c *HeadCommandContext)
 
+	// EnterHeadOption is called when entering the headOption production.
+	EnterHeadOption(c *HeadOptionContext)
+
 	// EnterTailCommand is called when entering the tailCommand production.
 	EnterTailCommand(c *TailCommandContext)
 
 	// EnterTopCommand is called when entering the topCommand production.
 	EnterTopCommand(c *TopCommandContext)
+
+	// EnterTopOption is called when entering the topOption production.
+	EnterTopOption(c *TopOptionContext)
 
 	// EnterRareCommand is called when entering the rareCommand production.
 	EnterRareCommand(c *RareCommandContext)
@@ -108,6 +114,9 @@ type SPLParserListener interface {
 
 	// EnterStreamstatsCommand is called when entering the streamstatsCommand production.
 	EnterStreamstatsCommand(c *StreamstatsCommandContext)
+
+	// EnterStreamstatsOption is called when entering the streamstatsOption production.
+	EnterStreamstatsOption(c *StreamstatsOptionContext)
 
 	// EnterTimechartCommand is called when entering the timechartCommand production.
 	EnterTimechartCommand(c *TimechartCommandContext)
@@ -343,11 +352,17 @@ type SPLParserListener interface {
 	// ExitHeadCommand is called when exiting the headCommand production.
 	ExitHeadCommand(c *HeadCommandContext)
 
+	// ExitHeadOption is called when exiting the headOption production.
+	ExitHeadOption(c *HeadOptionContext)
+
 	// ExitTailCommand is called when exiting the tailCommand production.
 	ExitTailCommand(c *TailCommandContext)
 
 	// ExitTopCommand is called when exiting the topCommand production.
 	ExitTopCommand(c *TopCommandContext)
+
+	// ExitTopOption is called when exiting the topOption production.
+	ExitTopOption(c *TopOptionContext)
 
 	// ExitRareCommand is called when exiting the rareCommand production.
 	ExitRareCommand(c *RareCommandContext)
@@ -384,6 +399,9 @@ type SPLParserListener interface {
 
 	// ExitStreamstatsCommand is called when exiting the streamstatsCommand production.
 	ExitStreamstatsCommand(c *StreamstatsCommandContext)
+
+	// ExitStreamstatsOption is called when exiting the streamstatsOption production.
+	ExitStreamstatsOption(c *StreamstatsOptionContext)
 
 	// ExitTimechartCommand is called when exiting the timechartCommand production.
 	ExitTimechartCommand(c *TimechartCommandContext)

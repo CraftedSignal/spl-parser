@@ -140,6 +140,12 @@ func (s *BaseSPLParserListener) EnterHeadCommand(ctx *HeadCommandContext) {}
 // ExitHeadCommand is called when production headCommand is exited.
 func (s *BaseSPLParserListener) ExitHeadCommand(ctx *HeadCommandContext) {}
 
+// EnterHeadOption is called when production headOption is entered.
+func (s *BaseSPLParserListener) EnterHeadOption(ctx *HeadOptionContext) {}
+
+// ExitHeadOption is called when production headOption is exited.
+func (s *BaseSPLParserListener) ExitHeadOption(ctx *HeadOptionContext) {}
+
 // EnterTailCommand is called when production tailCommand is entered.
 func (s *BaseSPLParserListener) EnterTailCommand(ctx *TailCommandContext) {}
 
@@ -151,6 +157,12 @@ func (s *BaseSPLParserListener) EnterTopCommand(ctx *TopCommandContext) {}
 
 // ExitTopCommand is called when production topCommand is exited.
 func (s *BaseSPLParserListener) ExitTopCommand(ctx *TopCommandContext) {}
+
+// EnterTopOption is called when production topOption is entered.
+func (s *BaseSPLParserListener) EnterTopOption(ctx *TopOptionContext) {}
+
+// ExitTopOption is called when production topOption is exited.
+func (s *BaseSPLParserListener) ExitTopOption(ctx *TopOptionContext) {}
 
 // EnterRareCommand is called when production rareCommand is entered.
 func (s *BaseSPLParserListener) EnterRareCommand(ctx *RareCommandContext) {}
@@ -223,6 +235,12 @@ func (s *BaseSPLParserListener) EnterStreamstatsCommand(ctx *StreamstatsCommandC
 
 // ExitStreamstatsCommand is called when production streamstatsCommand is exited.
 func (s *BaseSPLParserListener) ExitStreamstatsCommand(ctx *StreamstatsCommandContext) {}
+
+// EnterStreamstatsOption is called when production streamstatsOption is entered.
+func (s *BaseSPLParserListener) EnterStreamstatsOption(ctx *StreamstatsOptionContext) {}
+
+// ExitStreamstatsOption is called when production streamstatsOption is exited.
+func (s *BaseSPLParserListener) ExitStreamstatsOption(ctx *StreamstatsOptionContext) {}
 
 // EnterTimechartCommand is called when production timechartCommand is entered.
 func (s *BaseSPLParserListener) EnterTimechartCommand(ctx *TimechartCommandContext) {}

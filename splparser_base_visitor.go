@@ -87,11 +87,19 @@ func (v *BaseSPLParserVisitor) VisitHeadCommand(ctx *HeadCommandContext) interfa
 	return v.VisitChildren(ctx)
 }
 
+func (v *BaseSPLParserVisitor) VisitHeadOption(ctx *HeadOptionContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitTailCommand(ctx *TailCommandContext) interface{} {
 	return v.VisitChildren(ctx)
 }
 
 func (v *BaseSPLParserVisitor) VisitTopCommand(ctx *TopCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitTopOption(ctx *TopOptionContext) interface{} {
 	return v.VisitChildren(ctx)
 }
 
@@ -140,6 +148,10 @@ func (v *BaseSPLParserVisitor) VisitEventstatsCommand(ctx *EventstatsCommandCont
 }
 
 func (v *BaseSPLParserVisitor) VisitStreamstatsCommand(ctx *StreamstatsCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitStreamstatsOption(ctx *StreamstatsOptionContext) interface{} {
 	return v.VisitChildren(ctx)
 }
 

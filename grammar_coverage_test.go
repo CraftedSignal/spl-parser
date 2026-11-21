@@ -332,3 +332,38 @@ func TestWhereXORIsReportedIncomplete(t *testing.T) {
 		assertHasCondition(t, r.Conditions, want)
 	}
 }
+
+// assertNativeParse requires a complete native parse of query: no errors, no
+// incomplete flag, the `where marker=1` stage extracted, and the stage types.
+func assertNativeParse(t *testing.T, query string, stageTypes ...string) {
+	t.Helper()
+	r := ExtractConditions(query)
+	if len(r.Errors) != 0 || r.ExpressionIncomplete || !hasCondition(r.Conditions, "marker", "=", "1") {
+		t.Errorf("%s: errors=%q incomplete=%v conditions=%s", query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
+	}
+	stages := ClassifyPipelineStages(query)
+	got := make([]string, 0, len(stages))
+	for _, stage := range stages {
+		got = append(got, stage.CommandType)
+	}
+	if !reflect.DeepEqual(got, stageTypes) {
+		t.Errorf("%s: stage types %q, want %q", query, got, stageTypes)
+	}
+}
+
+// Options the Search Reference documents for top, rare, bin/bucket, head,
+// sort and streamstats, in the positions it shows them.
+func TestCommandOptionsParse(t *testing.T) {
+	assertNativeParse(t, `index=x | top limit=10 user | where marker=1`, "search", "top", "where")
+	assertNativeParse(t, `index=web | top limit=10 useother=t countfield=requests showperc=f uri | where marker=1`, "search", "top", "where")
+	assertNativeParse(t, `index=x status=200 | top 1 productName by categoryId showperc=f countfield=total | where marker=1`, "search", "top", "where")
+	assertNativeParse(t, `index=dns | rare limit=20 query_type by src_ip | where marker=1`, "search", "rare", "where")
+	assertNativeParse(t, `index=x | rare url limit=5 | where marker=1`, "search", "rare", "where")
+	assertNativeParse(t, `index=x | bin span=5m _time | where marker=1`, "search", "bucket", "where")
+	assertNativeParse(t, `index=x | bin _time span=5m as minute | where marker=1`, "search", "bucket", "where")
+	assertNativeParse(t, `index=x | bucket span=1d _time | where marker=1`, "search", "bucket", "where")
+	assertNativeParse(t, `index=x | head limit=10 | where marker=1`, "search", "head", "where")
+	assertNativeParse(t, `index=x | sort limit=12 host | where marker=1`, "search", "sort", "where")
+	assertNativeParse(t, `index=x | streamstats window=10 avg(value) as rolling_avg current=f by host | where marker=1`, "search", "streamstats", "where")
+	assertNativeParse(t, `index=x | streamstats avg(foo) by bar window=5 global=f | where marker=1`, "search", "streamstats", "where")
+}

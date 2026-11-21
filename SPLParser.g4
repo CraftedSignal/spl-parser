@@ -117,18 +117,22 @@ dedupOption
     : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER)
     ;
 
-// Sort command
+// Sort command: sort [<count> | limit=<int>] <sort-by-clause>, ...
 sortCommand
-    : SORT NUMBER? sortField (COMMA sortField)*
+    : SORT (NUMBER | IDENTIFIER EQ NUMBER)? sortField (COMMA sortField)*
     ;
 
 sortField
     : (PLUS | MINUS)? fieldName
     ;
 
-// Head command
+// Head command: head [<N>] [limit=<int>] [null=<bool>] [keeplast=<bool>]
 headCommand
-    : HEAD NUMBER?
+    : HEAD NUMBER? headOption*
+    ;
+
+headOption
+    : IDENTIFIER EQ (NUMBER | IDENTIFIER)
     ;
 
 // Tail command
@@ -136,14 +140,19 @@ tailCommand
     : TAIL NUMBER?
     ;
 
-// Top command
+// Top command: options such as limit=20 come before the fields, and may
+// also follow the BY clause (top 1 productName by categoryId showperc=f)
 topCommand
-    : TOP NUMBER? fieldList (BY fieldList)?
+    : TOP NUMBER? topOption* fieldList (BY fieldList)? topOption*
     ;
 
-// Rare command
+topOption
+    : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER)
+    ;
+
+// Rare command (same options as top, e.g. rare url limit=5)
 rareCommand
-    : RARE NUMBER? fieldList (BY fieldList)?
+    : RARE NUMBER? topOption* fieldList (BY fieldList)? topOption*
     ;
 
 // Lookup command
@@ -193,9 +202,14 @@ eventstatsCommand
     : EVENTSTATS statsFunction (COMMA? statsFunction)* (BY fieldList)?
     ;
 
-// Streamstats command
+// Streamstats command: options such as window=10 or current=f come before the
+// functions and may also follow them or the BY clause
 streamstatsCommand
-    : STREAMSTATS statsFunction (COMMA? statsFunction)* (BY fieldList)?
+    : STREAMSTATS streamstatsOption* statsFunction (COMMA? statsFunction | streamstatsOption)* (BY fieldList streamstatsOption*)?
+    ;
+
+streamstatsOption
+    : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER | TIME_SPAN)
     ;
 
 // Timechart command
@@ -258,9 +272,10 @@ convertFunction
     : IDENTIFIER LPAREN fieldName RPAREN (AS (fieldName | QUOTED_STRING))?
     ;
 
-// Bucket/bin command
+// Bucket/bin command: bin [<bin-options>...] <field> [AS <newfield>]; the
+// options may also follow the field (bin _time span=5m)
 bucketCommand
-    : (BUCKET | BIN) fieldName (bucketOption)*
+    : (BUCKET | BIN) bucketOption* fieldName bucketOption* (AS fieldName bucketOption*)?
     ;
 
 bucketOption
