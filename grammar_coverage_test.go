@@ -2,6 +2,7 @@ package spl
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -127,6 +128,34 @@ func TestBareValueKeepsPunctuation(t *testing.T) {
 		}
 		for _, want := range tc.want {
 			assertHasCondition(t, r.Conditions, want)
+		}
+	}
+}
+
+// An unquoted IPv4 address or CIDR block is one value. Splitting it at the
+// second dot invents a _raw term and, with a CIDR suffix, drops the rest.
+func TestUnquotedIPv4AndCIDRValues(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		want  []ExpectedCondition
+	}{
+		{`dest_ip=10.0.0.1`, []ExpectedCondition{{"dest_ip", "=", "10.0.0.1"}}},
+		{`index=main src_ip=10.0.0.0/8 action=allowed`, []ExpectedCondition{{"index", "=", "main"}, {"src_ip", "=", "10.0.0.0/8"}, {"action", "=", "allowed"}}},
+		{`index=main 10.1.2.3 action=allowed`, []ExpectedCondition{{"index", "=", "main"}, {"_raw", "contains", "10.1.2.3"}, {"action", "=", "allowed"}}},
+		{`index=main src_ip IN (10.0.0.1, 192.168.0.0/16)`, []ExpectedCondition{{"index", "=", "main"}, {"src_ip", "in", "10.0.0.1"}}},
+	} {
+		r := ExtractConditions(tc.query)
+		if len(r.Errors) != 0 || r.ExpressionIncomplete || len(r.Conditions) != len(tc.want) {
+			t.Errorf("%s: errors=%q incomplete=%v conditions=%s", tc.query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
+			continue
+		}
+		for _, want := range tc.want {
+			assertHasCondition(t, r.Conditions, want)
+		}
+		for _, condition := range r.Conditions {
+			if condition.Field == "src_ip" && condition.Operator == "in" && !reflect.DeepEqual(condition.Alternatives, []string{"10.0.0.1", "192.168.0.0/16"}) {
+				t.Errorf("%s: IN values = %q", tc.query, condition.Alternatives)
+			}
 		}
 	}
 }

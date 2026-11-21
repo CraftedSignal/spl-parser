@@ -449,6 +449,7 @@ argumentList
 value
     : QUOTED_STRING
     | NUMBER
+    | DOTTED_NUMBER   // 10.0.0.1, 10.0.0.0/8
     | TIME_SPAN       // Time values like -24h, 5m, 1d@d
     | wildcardValue   // Must come before others to match access*
     | colonValue      // Handle colon-separated values like o365:management:activity
@@ -467,6 +468,7 @@ bareValue
 bareValuePart
     : IDENTIFIER
     | NUMBER
+    | DOTTED_NUMBER
     | WILDCARD
     ;
 
@@ -498,6 +500,7 @@ wildcardValue
 bareWord
     : IDENTIFIER
     | NUMBER
+    | DOTTED_NUMBER
     | QUOTED_STRING
     | REST_PATH      // Unquoted fulltext path/glob, e.g. /var/log/*
     | wildcardValue  // Allows bare * or *value patterns as search terms

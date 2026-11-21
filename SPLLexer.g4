@@ -86,6 +86,12 @@ TIME_SPAN
     | '-'? [0-9]+ [smhdwMy] '@' [a-zA-Z]+
     ;
 
+// Three or more dot-separated numbers: an IPv4 address with an optional CIDR
+// suffix (10.0.0.1, 10.0.0.0/8) or a version (1.2.3). NUMBER would split them.
+DOTTED_NUMBER
+    : DIGIT+ ('.' DIGIT+) ('.' DIGIT+)+ ('/' DIGIT+)?
+    ;
+
 // Numbers (negative numbers handled in parser with MINUS token)
 NUMBER
     : DIGIT+ ('.' DIGIT+)?
