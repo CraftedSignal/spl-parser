@@ -2490,7 +2490,9 @@ func (e *conditionExtractor) EnterChartCommand(ctx *ChartCommandContext) {
 		return
 	}
 	e.commands = append(e.commands, "chart")
-	e.extractByFields(ctx.FieldList())
+	for _, fieldList := range ctx.AllFieldList() {
+		e.extractByFields(fieldList)
+	}
 	// Also extract the OVER field if present
 	if ctx.FieldName() != nil {
 		field := ctx.FieldName().GetText()

@@ -367,3 +367,28 @@ func TestCommandOptionsParse(t *testing.T) {
 	assertNativeParse(t, `index=x | streamstats window=10 avg(value) as rolling_avg current=f by host | where marker=1`, "search", "streamstats", "where")
 	assertNativeParse(t, `index=x | streamstats avg(foo) by bar window=5 global=f | where marker=1`, "search", "streamstats", "where")
 }
+
+// chart OVER <row-split> BY <column-split>, timechart with several functions
+// and split-by options, and a comma-separated tstats BY list.
+func TestAggregationSplitClausesParse(t *testing.T) {
+	assertNativeParse(t, `index=x | chart count over user by action | where marker=1`, "search", "chart", "where")
+	assertNativeParse(t, `index=x | chart max(delay) over site by org | where marker=1`, "search", "chart", "where")
+	assertNativeParse(t, `index=x | timechart span=1d dc(user) as u, count as c | where marker=1`, "search", "timechart", "where")
+	assertNativeParse(t, `index=x | timechart per_hour(price) by productName usenull=f useother=f | where marker=1`, "search", "timechart", "where")
+	assertNativeParse(t, `| tstats count where index=* by index, sourcetype | where marker=1`, "tstats", "where")
+	assertNativeParse(t, `| tstats count from datamodel=Authentication.Authentication by _time, Authentication.src span=1h | where marker=1`, "tstats", "where")
+
+	r := ExtractConditions(`index=x | chart count over user by action`)
+	for _, field := range []string{"user", "action"} {
+		if !containsString(r.GroupByFields, field) {
+			t.Errorf("chart over/by: GroupByFields %q lacks %s", r.GroupByFields, field)
+		}
+	}
+	r = ExtractConditions(`| tstats count where index=* by index, sourcetype, host`)
+	if !reflect.DeepEqual(r.GroupByFields, []string{"index", "sourcetype", "host"}) {
+		t.Errorf("tstats BY list: GroupByFields %q, want index, sourcetype and host", r.GroupByFields)
+	}
+	if aggregations := ExtractConditions(`index=x | timechart dc(user) as u, count as c`).Aggregations; len(aggregations) != 2 {
+		t.Errorf("timechart with two functions: aggregations %+v", aggregations)
+	}
+}

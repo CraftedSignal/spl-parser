@@ -212,18 +212,20 @@ streamstatsOption
     : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER | TIME_SPAN)
     ;
 
-// Timechart command
+// Timechart command: options such as span=1h before the functions, split-by
+// options such as usenull=f after the BY field
 timechartCommand
-    : TIMECHART (timechartOption)* statsFunction (BY fieldName)?
+    : TIMECHART (timechartOption)* statsFunction (COMMA? statsFunction)* (BY fieldName timechartOption*)?
     ;
 
 timechartOption
     : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER | TIME_SPAN)
     ;
 
-// Chart command
+// Chart command: chart <functions> [BY <row-split> <column-split>] or
+// [OVER <row-split>] [BY <column-split>]
 chartCommand
-    : CHART statsFunction (BY fieldList)? (OVER fieldName)?
+    : CHART statsFunction (COMMA? statsFunction)* (BY fieldList)? (OVER fieldName (BY fieldList)?)?
     ;
 
 // Fillnull command
@@ -300,7 +302,7 @@ tstatsCommand
     : TSTATS tstatsPreOption* (statsFunction (COMMA? statsFunction)*)?
       (FROM tstatsDatamodel)?
       (WHERE searchExpression)?
-      ((BY | GROUPBY) (tstatsPostOption | fieldOrQuoted)+)?
+      ((BY | GROUPBY) (tstatsPostOption | fieldOrQuoted) (COMMA? (tstatsPostOption | fieldOrQuoted))*)?
     ;
 
 tstatsPreOption
