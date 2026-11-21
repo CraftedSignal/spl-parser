@@ -20,6 +20,12 @@ func (s *BaseSPLParserListener) EnterEveryRule(ctx antlr.ParserRuleContext) {}
 // ExitEveryRule is called when any rule is exited.
 func (s *BaseSPLParserListener) ExitEveryRule(ctx antlr.ParserRuleContext) {}
 
+// EnterRoot is called when production root is entered.
+func (s *BaseSPLParserListener) EnterRoot(ctx *RootContext) {}
+
+// ExitRoot is called when production root is exited.
+func (s *BaseSPLParserListener) ExitRoot(ctx *RootContext) {}
+
 // EnterQuery is called when production query is entered.
 func (s *BaseSPLParserListener) EnterQuery(ctx *QueryContext) {}
 
@@ -134,6 +140,12 @@ func (s *BaseSPLParserListener) EnterHeadCommand(ctx *HeadCommandContext) {}
 // ExitHeadCommand is called when production headCommand is exited.
 func (s *BaseSPLParserListener) ExitHeadCommand(ctx *HeadCommandContext) {}
 
+// EnterHeadOption is called when production headOption is entered.
+func (s *BaseSPLParserListener) EnterHeadOption(ctx *HeadOptionContext) {}
+
+// ExitHeadOption is called when production headOption is exited.
+func (s *BaseSPLParserListener) ExitHeadOption(ctx *HeadOptionContext) {}
+
 // EnterTailCommand is called when production tailCommand is entered.
 func (s *BaseSPLParserListener) EnterTailCommand(ctx *TailCommandContext) {}
 
@@ -146,6 +158,12 @@ func (s *BaseSPLParserListener) EnterTopCommand(ctx *TopCommandContext) {}
 // ExitTopCommand is called when production topCommand is exited.
 func (s *BaseSPLParserListener) ExitTopCommand(ctx *TopCommandContext) {}
 
+// EnterTopOption is called when production topOption is entered.
+func (s *BaseSPLParserListener) EnterTopOption(ctx *TopOptionContext) {}
+
+// ExitTopOption is called when production topOption is exited.
+func (s *BaseSPLParserListener) ExitTopOption(ctx *TopOptionContext) {}
+
 // EnterRareCommand is called when production rareCommand is entered.
 func (s *BaseSPLParserListener) EnterRareCommand(ctx *RareCommandContext) {}
 
@@ -157,6 +175,12 @@ func (s *BaseSPLParserListener) EnterLookupCommand(ctx *LookupCommandContext) {}
 
 // ExitLookupCommand is called when production lookupCommand is exited.
 func (s *BaseSPLParserListener) ExitLookupCommand(ctx *LookupCommandContext) {}
+
+// EnterLookupField is called when production lookupField is entered.
+func (s *BaseSPLParserListener) EnterLookupField(ctx *LookupFieldContext) {}
+
+// ExitLookupField is called when production lookupField is exited.
+func (s *BaseSPLParserListener) ExitLookupField(ctx *LookupFieldContext) {}
 
 // EnterLookupOption is called when production lookupOption is entered.
 func (s *BaseSPLParserListener) EnterLookupOption(ctx *LookupOptionContext) {}
@@ -217,6 +241,12 @@ func (s *BaseSPLParserListener) EnterStreamstatsCommand(ctx *StreamstatsCommandC
 
 // ExitStreamstatsCommand is called when production streamstatsCommand is exited.
 func (s *BaseSPLParserListener) ExitStreamstatsCommand(ctx *StreamstatsCommandContext) {}
+
+// EnterStreamstatsOption is called when production streamstatsOption is entered.
+func (s *BaseSPLParserListener) EnterStreamstatsOption(ctx *StreamstatsOptionContext) {}
+
+// ExitStreamstatsOption is called when production streamstatsOption is exited.
+func (s *BaseSPLParserListener) ExitStreamstatsOption(ctx *StreamstatsOptionContext) {}
 
 // EnterTimechartCommand is called when production timechartCommand is entered.
 func (s *BaseSPLParserListener) EnterTimechartCommand(ctx *TimechartCommandContext) {}
@@ -487,6 +517,24 @@ func (s *BaseSPLParserListener) EnterValue(ctx *ValueContext) {}
 
 // ExitValue is called when production value is exited.
 func (s *BaseSPLParserListener) ExitValue(ctx *ValueContext) {}
+
+// EnterBareValue is called when production bareValue is entered.
+func (s *BaseSPLParserListener) EnterBareValue(ctx *BareValueContext) {}
+
+// ExitBareValue is called when production bareValue is exited.
+func (s *BaseSPLParserListener) ExitBareValue(ctx *BareValueContext) {}
+
+// EnterBareValuePart is called when production bareValuePart is entered.
+func (s *BaseSPLParserListener) EnterBareValuePart(ctx *BareValuePartContext) {}
+
+// ExitBareValuePart is called when production bareValuePart is exited.
+func (s *BaseSPLParserListener) ExitBareValuePart(ctx *BareValuePartContext) {}
+
+// EnterKeywordName is called when production keywordName is entered.
+func (s *BaseSPLParserListener) EnterKeywordName(ctx *KeywordNameContext) {}
+
+// ExitKeywordName is called when production keywordName is exited.
+func (s *BaseSPLParserListener) ExitKeywordName(ctx *KeywordNameContext) {}
 
 // EnterColonValue is called when production colonValue is entered.
 func (s *BaseSPLParserListener) EnterColonValue(ctx *ColonValueContext) {}

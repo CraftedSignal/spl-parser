@@ -4,6 +4,7 @@ lexer grammar SPLLexer;
 AND         : [Aa][Nn][Dd] ;
 OR          : [Oo][Rr] ;
 NOT         : [Nn][Oo][Tt] ;
+XOR         : [Xx][Oo][Rr] ;
 BY          : [Bb][Yy] ;
 AS          : [Aa][Ss] ;
 IN          : [Ii][Nn] ;
@@ -81,15 +82,41 @@ QUOTED_STRING
     ;
 
 // Time span values (must be before NUMBER to match span=1h, -24h, etc.)
+// Optional snap to a unit or a weekday: 1d@d, -7d@w1
 TIME_SPAN
-    : '-'? [0-9]+ [smhdwMy]
-    | '-'? [0-9]+ [smhdwMy] '@' [a-zA-Z]+
+    : '-'? [0-9]+ TIME_UNIT ('@' [a-zA-Z]+ [0-7]?)?
+    ;
+
+// Time units as the Splunk time modifier reference lists them, plus M
+fragment TIME_UNIT
+    : 's' | 'sec' | 'secs' | 'second' | 'seconds'
+    | 'm' | 'min' | 'mins' | 'minute' | 'minutes'
+    | 'h' | 'hr' | 'hrs' | 'hour' | 'hours'
+    | 'd' | 'day' | 'days'
+    | 'w' | 'week' | 'weeks'
+    | 'mon' | 'month' | 'months'
+    | 'q' | 'qtr' | 'qtrs' | 'quarter' | 'quarters'
+    | 'y' | 'yr' | 'yrs' | 'year' | 'years'
+    | 'us' | 'ms' | 'cs' | 'ds'
+    | 'M'
+    ;
+
+// Three or more dot-separated numbers: an IPv4 address with an optional CIDR
+// suffix (10.0.0.1, 10.0.0.0/8) or a version (1.2.3). NUMBER would split them.
+DOTTED_NUMBER
+    : DIGIT+ ('.' DIGIT+) ('.' DIGIT+)+ ('/' DIGIT+)?
     ;
 
 // Numbers (negative numbers handled in parser with MINUS token)
 NUMBER
     : DIGIT+ ('.' DIGIT+)?
     | '.' DIGIT+
+    ;
+
+// Unquoted words that start with a digit: 7z.exe, 0x1F, an MD5 hash. A tie
+// with TIME_SPAN, listed earlier, keeps 5m and 1d as time spans.
+DIGIT_WORD
+    : DIGIT+ [a-zA-Z_] [a-zA-Z0-9_]* ('.' [a-zA-Z0-9_]+)*
     ;
 
 fragment DIGIT : [0-9] ;
@@ -118,8 +145,9 @@ DOT         : '.' ;
 // Must have at least two segments to avoid consuming /Operational in sourcetype values
 // First segment must start with a letter to avoid consuming arithmetic like /60/60
 // e.g., /services/endpoint NOT /60/60
+// Later segments may hold : and URL escapes (ModularInputs:modular%20input%20commands)
 REST_PATH
-    : '/' [a-zA-Z] [a-zA-Z0-9_\-]* '/' [a-zA-Z0-9_\-*]+ ('/' [a-zA-Z0-9_\-*]+)*
+    : '/' [a-zA-Z] [a-zA-Z0-9_\-]* '/' [a-zA-Z0-9_\-*:%]+ ('/' [a-zA-Z0-9_\-*:%]+)*
     ;
 
 // Backtick macros

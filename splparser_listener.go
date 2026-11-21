@@ -7,6 +7,9 @@ import "github.com/antlr4-go/antlr/v4"
 type SPLParserListener interface {
 	antlr.ParseTreeListener
 
+	// EnterRoot is called when entering the root production.
+	EnterRoot(c *RootContext)
+
 	// EnterQuery is called when entering the query production.
 	EnterQuery(c *QueryContext)
 
@@ -64,17 +67,26 @@ type SPLParserListener interface {
 	// EnterHeadCommand is called when entering the headCommand production.
 	EnterHeadCommand(c *HeadCommandContext)
 
+	// EnterHeadOption is called when entering the headOption production.
+	EnterHeadOption(c *HeadOptionContext)
+
 	// EnterTailCommand is called when entering the tailCommand production.
 	EnterTailCommand(c *TailCommandContext)
 
 	// EnterTopCommand is called when entering the topCommand production.
 	EnterTopCommand(c *TopCommandContext)
 
+	// EnterTopOption is called when entering the topOption production.
+	EnterTopOption(c *TopOptionContext)
+
 	// EnterRareCommand is called when entering the rareCommand production.
 	EnterRareCommand(c *RareCommandContext)
 
 	// EnterLookupCommand is called when entering the lookupCommand production.
 	EnterLookupCommand(c *LookupCommandContext)
+
+	// EnterLookupField is called when entering the lookupField production.
+	EnterLookupField(c *LookupFieldContext)
 
 	// EnterLookupOption is called when entering the lookupOption production.
 	EnterLookupOption(c *LookupOptionContext)
@@ -105,6 +117,9 @@ type SPLParserListener interface {
 
 	// EnterStreamstatsCommand is called when entering the streamstatsCommand production.
 	EnterStreamstatsCommand(c *StreamstatsCommandContext)
+
+	// EnterStreamstatsOption is called when entering the streamstatsOption production.
+	EnterStreamstatsOption(c *StreamstatsOptionContext)
 
 	// EnterTimechartCommand is called when entering the timechartCommand production.
 	EnterTimechartCommand(c *TimechartCommandContext)
@@ -241,6 +256,15 @@ type SPLParserListener interface {
 	// EnterValue is called when entering the value production.
 	EnterValue(c *ValueContext)
 
+	// EnterBareValue is called when entering the bareValue production.
+	EnterBareValue(c *BareValueContext)
+
+	// EnterBareValuePart is called when entering the bareValuePart production.
+	EnterBareValuePart(c *BareValuePartContext)
+
+	// EnterKeywordName is called when entering the keywordName production.
+	EnterKeywordName(c *KeywordNameContext)
+
 	// EnterColonValue is called when entering the colonValue production.
 	EnterColonValue(c *ColonValueContext)
 
@@ -270,6 +294,9 @@ type SPLParserListener interface {
 
 	// EnterValueList is called when entering the valueList production.
 	EnterValueList(c *ValueListContext)
+
+	// ExitRoot is called when exiting the root production.
+	ExitRoot(c *RootContext)
 
 	// ExitQuery is called when exiting the query production.
 	ExitQuery(c *QueryContext)
@@ -328,17 +355,26 @@ type SPLParserListener interface {
 	// ExitHeadCommand is called when exiting the headCommand production.
 	ExitHeadCommand(c *HeadCommandContext)
 
+	// ExitHeadOption is called when exiting the headOption production.
+	ExitHeadOption(c *HeadOptionContext)
+
 	// ExitTailCommand is called when exiting the tailCommand production.
 	ExitTailCommand(c *TailCommandContext)
 
 	// ExitTopCommand is called when exiting the topCommand production.
 	ExitTopCommand(c *TopCommandContext)
 
+	// ExitTopOption is called when exiting the topOption production.
+	ExitTopOption(c *TopOptionContext)
+
 	// ExitRareCommand is called when exiting the rareCommand production.
 	ExitRareCommand(c *RareCommandContext)
 
 	// ExitLookupCommand is called when exiting the lookupCommand production.
 	ExitLookupCommand(c *LookupCommandContext)
+
+	// ExitLookupField is called when exiting the lookupField production.
+	ExitLookupField(c *LookupFieldContext)
 
 	// ExitLookupOption is called when exiting the lookupOption production.
 	ExitLookupOption(c *LookupOptionContext)
@@ -369,6 +405,9 @@ type SPLParserListener interface {
 
 	// ExitStreamstatsCommand is called when exiting the streamstatsCommand production.
 	ExitStreamstatsCommand(c *StreamstatsCommandContext)
+
+	// ExitStreamstatsOption is called when exiting the streamstatsOption production.
+	ExitStreamstatsOption(c *StreamstatsOptionContext)
 
 	// ExitTimechartCommand is called when exiting the timechartCommand production.
 	ExitTimechartCommand(c *TimechartCommandContext)
@@ -504,6 +543,15 @@ type SPLParserListener interface {
 
 	// ExitValue is called when exiting the value production.
 	ExitValue(c *ValueContext)
+
+	// ExitBareValue is called when exiting the bareValue production.
+	ExitBareValue(c *BareValueContext)
+
+	// ExitBareValuePart is called when exiting the bareValuePart production.
+	ExitBareValuePart(c *BareValuePartContext)
+
+	// ExitKeywordName is called when exiting the keywordName production.
+	ExitKeywordName(c *KeywordNameContext)
 
 	// ExitColonValue is called when exiting the colonValue production.
 	ExitColonValue(c *ColonValueContext)

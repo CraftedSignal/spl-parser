@@ -407,6 +407,11 @@ func (b *splExpressionBuilder) whereExpression(ctx IExpressionContext) *Conditio
 	if ctx == nil {
 		return nil
 	}
+	// ConditionExpression has no exclusive-or operator.
+	if ctx.XOR() != nil {
+		b.incomplete = true
+		return nil
+	}
 	return b.orExpression(ctx.OrExpression())
 }
 

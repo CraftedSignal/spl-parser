@@ -7,6 +7,9 @@ import "github.com/antlr4-go/antlr/v4"
 type SPLParserVisitor interface {
 	antlr.ParseTreeVisitor
 
+	// Visit a parse tree produced by SPLParser#root.
+	VisitRoot(ctx *RootContext) interface{}
+
 	// Visit a parse tree produced by SPLParser#query.
 	VisitQuery(ctx *QueryContext) interface{}
 
@@ -64,17 +67,26 @@ type SPLParserVisitor interface {
 	// Visit a parse tree produced by SPLParser#headCommand.
 	VisitHeadCommand(ctx *HeadCommandContext) interface{}
 
+	// Visit a parse tree produced by SPLParser#headOption.
+	VisitHeadOption(ctx *HeadOptionContext) interface{}
+
 	// Visit a parse tree produced by SPLParser#tailCommand.
 	VisitTailCommand(ctx *TailCommandContext) interface{}
 
 	// Visit a parse tree produced by SPLParser#topCommand.
 	VisitTopCommand(ctx *TopCommandContext) interface{}
 
+	// Visit a parse tree produced by SPLParser#topOption.
+	VisitTopOption(ctx *TopOptionContext) interface{}
+
 	// Visit a parse tree produced by SPLParser#rareCommand.
 	VisitRareCommand(ctx *RareCommandContext) interface{}
 
 	// Visit a parse tree produced by SPLParser#lookupCommand.
 	VisitLookupCommand(ctx *LookupCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#lookupField.
+	VisitLookupField(ctx *LookupFieldContext) interface{}
 
 	// Visit a parse tree produced by SPLParser#lookupOption.
 	VisitLookupOption(ctx *LookupOptionContext) interface{}
@@ -105,6 +117,9 @@ type SPLParserVisitor interface {
 
 	// Visit a parse tree produced by SPLParser#streamstatsCommand.
 	VisitStreamstatsCommand(ctx *StreamstatsCommandContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#streamstatsOption.
+	VisitStreamstatsOption(ctx *StreamstatsOptionContext) interface{}
 
 	// Visit a parse tree produced by SPLParser#timechartCommand.
 	VisitTimechartCommand(ctx *TimechartCommandContext) interface{}
@@ -240,6 +255,15 @@ type SPLParserVisitor interface {
 
 	// Visit a parse tree produced by SPLParser#value.
 	VisitValue(ctx *ValueContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#bareValue.
+	VisitBareValue(ctx *BareValueContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#bareValuePart.
+	VisitBareValuePart(ctx *BareValuePartContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#keywordName.
+	VisitKeywordName(ctx *KeywordNameContext) interface{}
 
 	// Visit a parse tree produced by SPLParser#colonValue.
 	VisitColonValue(ctx *ColonValueContext) interface{}

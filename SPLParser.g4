@@ -2,7 +2,12 @@ parser grammar SPLParser;
 
 options { tokenVocab=SPLLexer; }
 
-// Entry point
+// Entry point: a query must span the whole input. subsearch reuses query
+// inside brackets, so the end-of-input check lives in its own rule.
+root
+    : query EOF
+    ;
+
 // Queries can optionally start with | for generating commands like tstats, inputlookup
 query
     : PIPE? pipelineStage (PIPE pipelineStage)*
@@ -85,9 +90,9 @@ fieldsCommand
     : FIELDS (PLUS | MINUS)? fieldList
     ;
 
-// Rename command
+// Rename command (rename <wc-field> AS <wc-field>..., commas optional)
 renameCommand
-    : RENAME renameSpec (COMMA renameSpec)*
+    : RENAME renameSpec (COMMA? renameSpec)*
     ;
 
 renameSpec
@@ -112,18 +117,22 @@ dedupOption
     : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER)
     ;
 
-// Sort command
+// Sort command: sort [<count> | limit=<int>] <sort-by-clause>, ...
 sortCommand
-    : SORT NUMBER? sortField (COMMA sortField)*
+    : SORT (NUMBER | IDENTIFIER EQ NUMBER)? sortField (COMMA sortField)*
     ;
 
 sortField
-    : (PLUS | MINUS)? fieldName
+    : (PLUS | MINUS)? (fieldName | QUOTED_STRING)
     ;
 
-// Head command
+// Head command: head [<N>] [limit=<int>] [null=<bool>] [keeplast=<bool>]
 headCommand
-    : HEAD NUMBER?
+    : HEAD NUMBER? headOption*
+    ;
+
+headOption
+    : IDENTIFIER EQ (NUMBER | IDENTIFIER)
     ;
 
 // Tail command
@@ -131,19 +140,29 @@ tailCommand
     : TAIL NUMBER?
     ;
 
-// Top command
+// Top command: options such as limit=20 come before the fields, and may
+// also follow the BY clause (top 1 productName by categoryId showperc=f)
 topCommand
-    : TOP NUMBER? fieldList (BY fieldList)?
+    : TOP NUMBER? topOption* fieldList (BY fieldList)? topOption*
     ;
 
-// Rare command
+topOption
+    : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER)
+    ;
+
+// Rare command (same options as top, e.g. rare url limit=5)
 rareCommand
-    : RARE NUMBER? fieldList (BY fieldList)?
+    : RARE NUMBER? topOption* fieldList (BY fieldList)? topOption*
     ;
 
-// Lookup command
+// Lookup command: lookup <table> (<field> [AS <field>])... [OUTPUT | OUTPUTNEW
+// (<field> [AS <field>])...]. OUTPUT and OUTPUTNEW parse as list entries.
 lookupCommand
-    : LOOKUP lookupOption* IDENTIFIER fieldList
+    : LOOKUP lookupOption* IDENTIFIER lookupField+
+    ;
+
+lookupField
+    : fieldOrQuoted (AS fieldOrQuoted)?
     ;
 
 lookupOption
@@ -170,8 +189,9 @@ transactionCommand
     : TRANSACTION fieldList (transactionOption)*
     ;
 
+// startswith= and endswith= also take an unquoted search expression or eval(...)
 transactionOption
-    : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER | TIME_SPAN)
+    : IDENTIFIER EQ (QUOTED_STRING | fieldName comparisonOp value | functionCall | fieldName | NUMBER | TIME_SPAN)
     ;
 
 // Spath command
@@ -188,23 +208,30 @@ eventstatsCommand
     : EVENTSTATS statsFunction (COMMA? statsFunction)* (BY fieldList)?
     ;
 
-// Streamstats command
+// Streamstats command: options such as window=10 or current=f come before the
+// functions and may also follow them or the BY clause
 streamstatsCommand
-    : STREAMSTATS statsFunction (COMMA? statsFunction)* (BY fieldList)?
+    : STREAMSTATS streamstatsOption* statsFunction (COMMA? statsFunction | streamstatsOption)* (BY fieldList streamstatsOption*)?
     ;
 
-// Timechart command
+streamstatsOption
+    : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER | TIME_SPAN)
+    ;
+
+// Timechart command: options such as span=1h before the functions, split-by
+// options such as usenull=f after the BY field
 timechartCommand
-    : TIMECHART (timechartOption)* statsFunction (BY fieldName)?
+    : TIMECHART (timechartOption)* statsFunction (COMMA? statsFunction)* (BY fieldName timechartOption*)?
     ;
 
 timechartOption
     : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER | TIME_SPAN)
     ;
 
-// Chart command
+// Chart command: chart <functions> [BY <row-split> <column-split>] or
+// [OVER <row-split>] [BY <column-split>]
 chartCommand
-    : CHART statsFunction (BY fieldList)? (OVER fieldName)?
+    : CHART statsFunction (COMMA? statsFunction)* (BY fieldList)? (OVER fieldName (BY fieldList)?)?
     ;
 
 // Fillnull command
@@ -250,12 +277,13 @@ convertOption
     ;
 
 convertFunction
-    : IDENTIFIER LPAREN fieldName RPAREN (AS (fieldName | QUOTED_STRING))?
+    : IDENTIFIER LPAREN (fieldName | QUOTED_STRING) RPAREN (AS (fieldName | QUOTED_STRING))?
     ;
 
-// Bucket/bin command
+// Bucket/bin command: bin [<bin-options>...] <field> [AS <newfield>]; the
+// options may also follow the field (bin _time span=5m)
 bucketCommand
-    : (BUCKET | BIN) fieldName (bucketOption)*
+    : (BUCKET | BIN) bucketOption* fieldName bucketOption* (AS fieldName bucketOption*)?
     ;
 
 bucketOption
@@ -280,7 +308,7 @@ tstatsCommand
     : TSTATS tstatsPreOption* (statsFunction (COMMA? statsFunction)*)?
       (FROM tstatsDatamodel)?
       (WHERE searchExpression)?
-      ((BY | GROUPBY) (tstatsPostOption | fieldOrQuoted)+)?
+      ((BY | GROUPBY) (tstatsPostOption | fieldOrQuoted) (COMMA? (tstatsPostOption | fieldOrQuoted))*)?
     ;
 
 tstatsPreOption
@@ -375,9 +403,9 @@ logicalOp
     | OR
     ;
 
-// Expression (for where clause and eval)
+// Expression (for where clause and eval); eval applies XOR after OR
 expression
-    : orExpression
+    : orExpression (XOR expression)?
     ;
 
 orExpression
@@ -394,9 +422,10 @@ notExpression
     ;
 
 // Comparison expression with arithmetic on both sides
-// NOTE: condition must come first to properly parse field=value in where clauses
+// NOTE: condition must come before the arithmetic form to parse field=value in where clauses
 comparisonExpression
-    : condition  // Field conditions like field=value - must be first!
+    : fieldName comparisonOp functionCall  // user=lower(src_user), ahead of condition: not user=lower AND (src_user)
+    | condition  // Field conditions like field=value
     | additiveExpression (comparisonOp additiveExpression)?
     ;
 
@@ -444,10 +473,43 @@ argumentList
 value
     : QUOTED_STRING
     | NUMBER
+    | DOTTED_NUMBER   // 10.0.0.1, 10.0.0.0/8
+    | DIGIT_WORD      // 7z.exe, 0x1F
     | TIME_SPAN       // Time values like -24h, 5m, 1d@d
     | wildcardValue   // Must come before others to match access*
     | colonValue      // Handle colon-separated values like o365:management:activity
     | IDENTIFIER
+    | keywordName     // action=search
+    | bareValue       // Must stay last: os-linux, web-01, admin$
+    ;
+
+// Unquoted search value that runs on through - . $ and @, e.g. os-linux, web-01,
+// john.doe@example.com, admin$, prod-*. The parser skips whitespace, so these
+// parts also join across it. Being the last value alternative, it applies only
+// where a shorter value cannot continue, so where/eval x=a-b keeps its parse.
+bareValue
+    : bareValuePart ((MINUS | DOT) bareValuePart | DOLLAR | TIME_MODIFIER)+
+    ;
+
+bareValuePart
+    : IDENTIFIER
+    | NUMBER
+    | DOTTED_NUMBER
+    | DIGIT_WORD
+    | WILDCARD
+    | keywordName
+    ;
+
+// Command and function names are plain words as a field name or a value
+// (index=_audit action=search, | table title search). Operators and clause
+// keywords (AND, OR, NOT, XOR, IN, AS, BY, OVER, FROM, GROUPBY) are not: Splunk
+// requires quotation marks to search for them as values.
+keywordName
+    : SEARCH | WHERE | EVAL | STATS | TABLE | FIELDS | RENAME | REX | DEDUP | SORT
+    | HEAD | TAIL | TOP | RARE | LOOKUP | JOIN | APPEND | TRANSACTION | SPATH
+    | EVENTSTATS | STREAMSTATS | TIMECHART | CHART | FILLNULL | MAKEMV | MVEXPAND
+    | FORMAT | CONVERT | BUCKET | BIN | REST | TSTATS | MSTATS | INPUTLOOKUP
+    | LIKE | MATCH | CIDRMATCH | ISNOTNULL | ISNULL
     ;
 
 // Colon-separated values (common in SPL for sourcetypes, eventtypes, etc.)
@@ -478,6 +540,8 @@ wildcardValue
 bareWord
     : IDENTIFIER
     | NUMBER
+    | DOTTED_NUMBER
+    | DIGIT_WORD
     | QUOTED_STRING
     | REST_PATH      // Unquoted fulltext path/glob, e.g. /var/log/*
     | wildcardValue  // Allows bare * or *value patterns as search terms
@@ -489,6 +553,7 @@ bareWord
 // Supports template variables (<<FIELD>>) from foreach command
 fieldName
     : fieldNameBase (fieldNameSuffix (DOT fieldNameBase fieldNameSuffix?)*)?
+    | fieldNameBase WILDCARD       // wildcard selector: fields - _*, rename EU* AS EMEA*
     | NUMBER
     | TEMPLATE_VAR IDENTIFIER?     // <<FIELD>> or <<FIELD>>_pct
     ;
@@ -502,9 +567,9 @@ fieldNameSuffix
 
 fieldNameBase
     : IDENTIFIER (MINUS IDENTIFIER)*
+    | IDENTIFIER COLON COLON IDENTIFIER  // tag::host
     | FROM
-    | MSTATS
-    | INPUTLOOKUP
+    | keywordName
     ;
 
 // Field list (SPL allows both space-separated and comma-separated)

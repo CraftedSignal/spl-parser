@@ -7,6 +7,10 @@ type BaseSPLParserVisitor struct {
 	*antlr.BaseParseTreeVisitor
 }
 
+func (v *BaseSPLParserVisitor) VisitRoot(ctx *RootContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitQuery(ctx *QueryContext) interface{} {
 	return v.VisitChildren(ctx)
 }
@@ -83,6 +87,10 @@ func (v *BaseSPLParserVisitor) VisitHeadCommand(ctx *HeadCommandContext) interfa
 	return v.VisitChildren(ctx)
 }
 
+func (v *BaseSPLParserVisitor) VisitHeadOption(ctx *HeadOptionContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitTailCommand(ctx *TailCommandContext) interface{} {
 	return v.VisitChildren(ctx)
 }
@@ -91,11 +99,19 @@ func (v *BaseSPLParserVisitor) VisitTopCommand(ctx *TopCommandContext) interface
 	return v.VisitChildren(ctx)
 }
 
+func (v *BaseSPLParserVisitor) VisitTopOption(ctx *TopOptionContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitRareCommand(ctx *RareCommandContext) interface{} {
 	return v.VisitChildren(ctx)
 }
 
 func (v *BaseSPLParserVisitor) VisitLookupCommand(ctx *LookupCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitLookupField(ctx *LookupFieldContext) interface{} {
 	return v.VisitChildren(ctx)
 }
 
@@ -136,6 +152,10 @@ func (v *BaseSPLParserVisitor) VisitEventstatsCommand(ctx *EventstatsCommandCont
 }
 
 func (v *BaseSPLParserVisitor) VisitStreamstatsCommand(ctx *StreamstatsCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitStreamstatsOption(ctx *StreamstatsOptionContext) interface{} {
 	return v.VisitChildren(ctx)
 }
 
@@ -316,6 +336,18 @@ func (v *BaseSPLParserVisitor) VisitArgumentList(ctx *ArgumentListContext) inter
 }
 
 func (v *BaseSPLParserVisitor) VisitValue(ctx *ValueContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitBareValue(ctx *BareValueContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitBareValuePart(ctx *BareValuePartContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitKeywordName(ctx *KeywordNameContext) interface{} {
 	return v.VisitChildren(ctx)
 }
 
