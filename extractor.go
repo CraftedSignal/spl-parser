@@ -124,7 +124,7 @@ type JoinInfo struct {
 	Subsearch     *ParseResult      `json:"subsearch"`                // Recursively parsed subsearch
 	PipeStage     int               `json:"pipe_stage"`               // Pipeline stage where join appears
 	IsAppend      bool              `json:"is_append,omitempty"`      // True if this is an APPEND, not JOIN
-	ExposedFields []string          `json:"exposed_fields,omitempty"` // Fields the subsearch makes available
+	ExposedFields []string          `json:"exposed_fields,omitempty"` // Fields the subsearch makes available, sorted
 }
 
 // SearchScopeMetadata are fields that define WHERE to search, not WHAT to match
@@ -2172,6 +2172,8 @@ func deriveExposedFields(subResult *ParseResult, joinFields []string) []string {
 	for f := range fieldSet {
 		result = append(result, f)
 	}
+	// Map iteration order varies between calls.
+	sort.Strings(result)
 	return result
 }
 
