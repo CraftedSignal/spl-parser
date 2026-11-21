@@ -454,6 +454,7 @@ value
     | wildcardValue   // Must come before others to match access*
     | colonValue      // Handle colon-separated values like o365:management:activity
     | IDENTIFIER
+    | keywordName     // action=search
     | bareValue       // Must stay last: os-linux, web-01, admin$
     ;
 
@@ -470,6 +471,19 @@ bareValuePart
     | NUMBER
     | DOTTED_NUMBER
     | WILDCARD
+    | keywordName
+    ;
+
+// Command and function names are plain words as a field name or a value
+// (index=_audit action=search, | table title search). Operators and clause
+// keywords (AND, OR, NOT, IN, AS, BY, OVER, FROM, GROUPBY) are not: Splunk
+// requires quotation marks to search for them as values.
+keywordName
+    : SEARCH | WHERE | EVAL | STATS | TABLE | FIELDS | RENAME | REX | DEDUP | SORT
+    | HEAD | TAIL | TOP | RARE | LOOKUP | JOIN | APPEND | TRANSACTION | SPATH
+    | EVENTSTATS | STREAMSTATS | TIMECHART | CHART | FILLNULL | MAKEMV | MVEXPAND
+    | FORMAT | CONVERT | BUCKET | BIN | REST | TSTATS | MSTATS | INPUTLOOKUP
+    | LIKE | MATCH | CIDRMATCH | ISNOTNULL | ISNULL
     ;
 
 // Colon-separated values (common in SPL for sourcetypes, eventtypes, etc.)
@@ -526,8 +540,7 @@ fieldNameSuffix
 fieldNameBase
     : IDENTIFIER (MINUS IDENTIFIER)*
     | FROM
-    | MSTATS
-    | INPUTLOOKUP
+    | keywordName
     ;
 
 // Field list (SPL allows both space-separated and comma-separated)

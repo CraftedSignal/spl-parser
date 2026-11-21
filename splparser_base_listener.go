@@ -506,6 +506,12 @@ func (s *BaseSPLParserListener) EnterBareValuePart(ctx *BareValuePartContext) {}
 // ExitBareValuePart is called when production bareValuePart is exited.
 func (s *BaseSPLParserListener) ExitBareValuePart(ctx *BareValuePartContext) {}
 
+// EnterKeywordName is called when production keywordName is entered.
+func (s *BaseSPLParserListener) EnterKeywordName(ctx *KeywordNameContext) {}
+
+// ExitKeywordName is called when production keywordName is exited.
+func (s *BaseSPLParserListener) ExitKeywordName(ctx *KeywordNameContext) {}
+
 // EnterColonValue is called when production colonValue is entered.
 func (s *BaseSPLParserListener) EnterColonValue(ctx *ColonValueContext) {}
 

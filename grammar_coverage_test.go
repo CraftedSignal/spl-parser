@@ -159,3 +159,66 @@ func TestUnquotedIPv4AndCIDRValues(t *testing.T) {
 		}
 	}
 }
+
+// A command or function name is a plain word as a value or a field name
+// (index=_audit action=search is Splunk's own audit idiom). It must not send
+// the query off the native parser.
+func TestCommandNameAsValueOrFieldName(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		want  []ExpectedCondition
+	}{
+		{`index=_audit action=search "failed login" user=bob`, []ExpectedCondition{{"index", "=", "_audit"}, {"action", "=", "search"}, {"_raw", "contains", "failed login"}, {"user", "=", "bob"}}},
+		{`index=_audit action=search | where like(user, "adm%")`, []ExpectedCondition{{"index", "=", "_audit"}, {"action", "=", "search"}, {"user", "like", "adm*"}}},
+		{`index=_audit action=search | stats count by user | where count>5`, []ExpectedCondition{{"index", "=", "_audit"}, {"action", "=", "search"}, {"count", ">", "5"}}},
+		{`index=x type=top mode=head format=json`, []ExpectedCondition{{"index", "=", "x"}, {"type", "=", "top"}, {"mode", "=", "head"}, {"format", "=", "json"}}},
+	} {
+		r := ExtractConditions(tc.query)
+		if len(r.Errors) != 0 || r.ExpressionIncomplete || len(r.Conditions) != len(tc.want) {
+			t.Errorf("%s: errors=%q incomplete=%v conditions=%s", tc.query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
+			continue
+		}
+		for _, want := range tc.want {
+			assertHasCondition(t, r.Conditions, want)
+		}
+	}
+
+	r := ExtractConditions(`index=_audit action=search NOT (info=granted OR info=completed)`)
+	if len(r.Errors) != 0 || r.ExpressionIncomplete || r.Expression == nil || len(r.Conditions) != 4 {
+		t.Errorf("NOT (.. OR ..) lost its grouping: errors=%q incomplete=%v expression=%v conditions=%s", r.Errors, r.ExpressionIncomplete, r.Expression, conditionSummary(r.Conditions))
+	}
+	requireSPLCondition(t, r.Conditions, "info", "=", "granted", true)
+	requireSPLCondition(t, r.Conditions, "info", "=", "completed", true)
+	r = ExtractConditions(`index=_audit action=search | join user [search index=b status=failed]`)
+	if len(r.Errors) != 0 || r.ExpressionIncomplete || len(r.Joins) != 1 {
+		t.Errorf("join query: errors=%q incomplete=%v joins=%d", r.Errors, r.ExpressionIncomplete, len(r.Joins))
+	}
+	assertNoCondition(t, r.Conditions, "status")
+
+	query := `| rest /servicesNS/-/-/saved/searches splunk_server=local | table title search`
+	if r := ExtractConditions(query); len(r.Errors) != 0 || r.ExpressionIncomplete {
+		t.Errorf("%s: errors=%q incomplete=%v", query, r.Errors, r.ExpressionIncomplete)
+	}
+	if stages := ClassifyPipelineStages(query); len(stages) != 2 || stages[1].CommandType != "table" {
+		t.Errorf("%s: stages=%+v", query, stages)
+	}
+}
+
+// Splunk requires quotation marks around an operator or keyword searched as a
+// value (country=IN, country=AS, iso=AND, state=OR), so the grammar keeps
+// rejecting the unquoted forms and accepts the quoted ones.
+func TestOperatorKeywordValueNeedsQuotes(t *testing.T) {
+	for query, wantErrors := range map[string]bool{
+		`index=x country=IN`: true, `index=x country=AS`: true, `index=x state=OR`: true, `index=x a=by`: true,
+		`index=x country="IN"`: false, `index=x state="OR"`: false,
+	} {
+		parser := splParserForTest(t, query)
+		parser.RemoveErrorListeners()
+		listener := &errorListener{}
+		parser.AddErrorListener(listener)
+		parser.Root()
+		if got := len(listener.errors) > 0; got != wantErrors {
+			t.Errorf("%s: syntax errors %q, want errors=%v", query, listener.errors, wantErrors)
+		}
+	}
+}

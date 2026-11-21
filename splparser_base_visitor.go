@@ -331,6 +331,10 @@ func (v *BaseSPLParserVisitor) VisitBareValuePart(ctx *BareValuePartContext) int
 	return v.VisitChildren(ctx)
 }
 
+func (v *BaseSPLParserVisitor) VisitKeywordName(ctx *KeywordNameContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitColonValue(ctx *ColonValueContext) interface{} {
 	return v.VisitChildren(ctx)
 }

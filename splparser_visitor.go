@@ -250,6 +250,9 @@ type SPLParserVisitor interface {
 	// Visit a parse tree produced by SPLParser#bareValuePart.
 	VisitBareValuePart(ctx *BareValuePartContext) interface{}
 
+	// Visit a parse tree produced by SPLParser#keywordName.
+	VisitKeywordName(ctx *KeywordNameContext) interface{}
+
 	// Visit a parse tree produced by SPLParser#colonValue.
 	VisitColonValue(ctx *ColonValueContext) interface{}
 
