@@ -245,3 +245,19 @@ func TestDigitLeadingBareValue(t *testing.T) {
 		}
 	}
 }
+
+// Relative time modifiers take every unit Splunk lists (min, hours, days, mon,
+// sec ...) and weekday snaps such as @w1. A longer unit must not leave its
+// tail behind as a _raw term or stop the parser.
+func TestRelativeTimeUnits(t *testing.T) {
+	for _, modifier := range []string{"-2hours", "-15min", "-30days", "-1mon", "-10sec", "-1qtr", "-2years", "-7d@w1", "-1mon@mon", "-500ms"} {
+		query := `index=x earliest=` + modifier + ` user=bob`
+		r := ExtractConditions(query)
+		if len(r.Errors) != 0 || r.ExpressionIncomplete || len(r.Conditions) != 2 {
+			t.Errorf("%s: errors=%q incomplete=%v conditions=%s", query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
+			continue
+		}
+		assertHasCondition(t, r.Conditions, ExpectedCondition{"index", "=", "x"})
+		assertHasCondition(t, r.Conditions, ExpectedCondition{"user", "=", "bob"})
+	}
+}

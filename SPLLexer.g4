@@ -81,9 +81,23 @@ QUOTED_STRING
     ;
 
 // Time span values (must be before NUMBER to match span=1h, -24h, etc.)
+// Optional snap to a unit or a weekday: 1d@d, -7d@w1
 TIME_SPAN
-    : '-'? [0-9]+ [smhdwMy]
-    | '-'? [0-9]+ [smhdwMy] '@' [a-zA-Z]+
+    : '-'? [0-9]+ TIME_UNIT ('@' [a-zA-Z]+ [0-7]?)?
+    ;
+
+// Time units as the Splunk time modifier reference lists them, plus M
+fragment TIME_UNIT
+    : 's' | 'sec' | 'secs' | 'second' | 'seconds'
+    | 'm' | 'min' | 'mins' | 'minute' | 'minutes'
+    | 'h' | 'hr' | 'hrs' | 'hour' | 'hours'
+    | 'd' | 'day' | 'days'
+    | 'w' | 'week' | 'weeks'
+    | 'mon' | 'month' | 'months'
+    | 'q' | 'qtr' | 'qtrs' | 'quarter' | 'quarters'
+    | 'y' | 'yr' | 'yrs' | 'year' | 'years'
+    | 'us' | 'ms' | 'cs' | 'ds'
+    | 'M'
     ;
 
 // Three or more dot-separated numbers: an IPv4 address with an optional CIDR
