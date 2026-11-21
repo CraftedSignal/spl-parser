@@ -4,6 +4,7 @@ lexer grammar SPLLexer;
 AND         : [Aa][Nn][Dd] ;
 OR          : [Oo][Rr] ;
 NOT         : [Nn][Oo][Tt] ;
+XOR         : [Xx][Oo][Rr] ;
 BY          : [Bb][Yy] ;
 AS          : [Aa][Ss] ;
 IN          : [Ii][Nn] ;

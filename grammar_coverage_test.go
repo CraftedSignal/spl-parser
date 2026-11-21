@@ -303,3 +303,32 @@ func TestWhereComparisonWithFunctionCall(t *testing.T) {
 		}
 	}
 }
+
+// XOR is an eval operator with the lowest precedence (after OR). The Boolean
+// expression model has no exclusive or, so a where clause with XOR must say
+// its expression is unavailable instead of reading XOR as a field ANDed in.
+func TestWhereXORIsReportedIncomplete(t *testing.T) {
+	for _, query := range []string{
+		`index=x | where a=1 XOR b=2`,
+		`index=x | where (a=1 XOR b=2) OR c=3`,
+	} {
+		r := ExtractConditions(query)
+		if len(r.Errors) != 0 || !r.ExpressionIncomplete || r.Expression != nil {
+			t.Errorf("%s: errors=%q incomplete=%v expression=%v", query, r.Errors, r.ExpressionIncomplete, r.Expression)
+		}
+		assertNoCondition(t, r.Conditions, "XOR")
+	}
+
+	// Like AND and OR, XOR is a keyword: a value "xor" needs quotes. Inside an
+	// eval assignment it parses as an operator.
+	for query, want := range map[string]ExpectedCondition{
+		`index=x mode="xor"`:                             {"mode", "=", "xor"},
+		`index=x | eval z=if(a XOR b, 1, 0) | where z=1`: {"z", "=", "1"},
+	} {
+		r := ExtractConditions(query)
+		if len(r.Errors) != 0 || r.ExpressionIncomplete || r.Expression == nil {
+			t.Errorf("%s: errors=%q incomplete=%v expression=%v", query, r.Errors, r.ExpressionIncomplete, r.Expression)
+		}
+		assertHasCondition(t, r.Conditions, want)
+	}
+}

@@ -380,9 +380,9 @@ logicalOp
     | OR
     ;
 
-// Expression (for where clause and eval)
+// Expression (for where clause and eval); eval applies XOR after OR
 expression
-    : orExpression
+    : orExpression (XOR expression)?
     ;
 
 orExpression
@@ -479,7 +479,7 @@ bareValuePart
 
 // Command and function names are plain words as a field name or a value
 // (index=_audit action=search, | table title search). Operators and clause
-// keywords (AND, OR, NOT, IN, AS, BY, OVER, FROM, GROUPBY) are not: Splunk
+// keywords (AND, OR, NOT, XOR, IN, AS, BY, OVER, FROM, GROUPBY) are not: Splunk
 // requires quotation marks to search for them as values.
 keywordName
     : SEARCH | WHERE | EVAL | STATS | TABLE | FIELDS | RENAME | REX | DEDUP | SORT
