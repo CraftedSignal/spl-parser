@@ -145,8 +145,9 @@ DOT         : '.' ;
 // Must have at least two segments to avoid consuming /Operational in sourcetype values
 // First segment must start with a letter to avoid consuming arithmetic like /60/60
 // e.g., /services/endpoint NOT /60/60
+// Later segments may hold : and URL escapes (ModularInputs:modular%20input%20commands)
 REST_PATH
-    : '/' [a-zA-Z] [a-zA-Z0-9_\-]* '/' [a-zA-Z0-9_\-*]+ ('/' [a-zA-Z0-9_\-*]+)*
+    : '/' [a-zA-Z] [a-zA-Z0-9_\-]* '/' [a-zA-Z0-9_\-*:%]+ ('/' [a-zA-Z0-9_\-*:%]+)*
     ;
 
 // Backtick macros

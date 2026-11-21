@@ -553,6 +553,7 @@ bareWord
 // Supports template variables (<<FIELD>>) from foreach command
 fieldName
     : fieldNameBase (fieldNameSuffix (DOT fieldNameBase fieldNameSuffix?)*)?
+    | fieldNameBase WILDCARD       // wildcard selector: fields - _*, rename EU* AS EMEA*
     | NUMBER
     | TEMPLATE_VAR IDENTIFIER?     // <<FIELD>> or <<FIELD>>_pct
     ;

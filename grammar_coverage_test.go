@@ -408,3 +408,20 @@ func TestFieldClausesParse(t *testing.T) {
 		t.Errorf("rename pairs without commas: FieldAliases %v", aliases)
 	}
 }
+
+// fields, table and rename take wildcard field names (fields - _*, rename EU*
+// AS EMEA*). The dataflow cannot resolve such a selector, so the stage is
+// opaque, but the rest of the query is parsed. A rest endpoint may hold : and
+// URL escapes.
+func TestWildcardFieldNamesAndRestPathsParse(t *testing.T) {
+	assertNativeParse(t, `| rest /services/admin/inputstatus/ModularInputs:modular%20input%20commands splunk_server=local | where marker=1`, "rest", "where")
+	assertNativeParse(t, `index=x | fields - _* | where marker=1`, "search", "fields", "where")
+	assertNativeParse(t, `index=x | fields inputs* | where marker=1`, "search", "fields", "where")
+	assertNativeParse(t, `index=x | table _time inputs* | where marker=1`, "search", "table", "where")
+	assertNativeParse(t, `index=x | rename EU* AS EMEA* | where marker=1`, "search", "rename", "where")
+
+	r := ExtractConditions(`index=x | table _time inputs* | where marker=1`)
+	if r.Dataflow == nil || r.Dataflow.Complete {
+		t.Errorf("a wildcard table selector must leave the dataflow incomplete: %+v", r.Dataflow)
+	}
+}
