@@ -261,3 +261,45 @@ func TestRelativeTimeUnits(t *testing.T) {
 		assertHasCondition(t, r.Conditions, ExpectedCondition{"user", "=", "bob"})
 	}
 }
+
+// In where, `field <op> func(arg)` compares the field with the function's
+// result. It is one opaque scalar predicate, not a comparison with a field
+// named after the function plus the argument as a second ANDed operand.
+func TestWhereComparisonWithFunctionCall(t *testing.T) {
+	for _, tc := range []struct {
+		query      string
+		scalars    []string
+		conditions []ExpectedCondition
+	}{
+		{`index=x | where user=lower(src_user)`, []string{"user=lower(src_user)"}, []ExpectedCondition{{"index", "=", "x"}}},
+		{`index=x | where count>tonumber(threshold)`, []string{"count>tonumber(threshold)"}, []ExpectedCondition{{"index", "=", "x"}}},
+		{`index=x | where a!=upper(b) AND c=1`, []string{"a!=upper(b)"}, []ExpectedCondition{{"index", "=", "x"}, {"c", "=", "1"}}},
+		{`index=x | where a=mvindex(b,0)`, []string{"a=mvindex(b,0)"}, []ExpectedCondition{{"index", "=", "x"}}},
+	} {
+		r := ExtractConditions(tc.query)
+		if len(r.Errors) != 0 || r.ExpressionIncomplete || len(r.Conditions) != len(tc.conditions) {
+			t.Errorf("%s: errors=%q incomplete=%v conditions=%s", tc.query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
+			continue
+		}
+		for _, want := range tc.conditions {
+			assertHasCondition(t, r.Conditions, want)
+		}
+		var scalars []string
+		var collect func(*ConditionExpression)
+		collect = func(expression *ConditionExpression) {
+			if expression == nil {
+				return
+			}
+			if expression.Operator == BooleanScalar && expression.Scalar != nil {
+				scalars = append(scalars, expression.Scalar.Expression)
+			}
+			for _, child := range expression.Children {
+				collect(child)
+			}
+		}
+		collect(r.Expression)
+		if !reflect.DeepEqual(scalars, tc.scalars) {
+			t.Errorf("%s: scalar predicates %q, want %q", tc.query, scalars, tc.scalars)
+		}
+	}
+}

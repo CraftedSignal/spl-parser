@@ -399,9 +399,10 @@ notExpression
     ;
 
 // Comparison expression with arithmetic on both sides
-// NOTE: condition must come first to properly parse field=value in where clauses
+// NOTE: condition must come before the arithmetic form to parse field=value in where clauses
 comparisonExpression
-    : condition  // Field conditions like field=value - must be first!
+    : fieldName comparisonOp functionCall  // user=lower(src_user), ahead of condition: not user=lower AND (src_user)
+    | condition  // Field conditions like field=value
     | additiveExpression (comparisonOp additiveExpression)?
     ;
 
