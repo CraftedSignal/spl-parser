@@ -450,6 +450,7 @@ value
     : QUOTED_STRING
     | NUMBER
     | DOTTED_NUMBER   // 10.0.0.1, 10.0.0.0/8
+    | DIGIT_WORD      // 7z.exe, 0x1F
     | TIME_SPAN       // Time values like -24h, 5m, 1d@d
     | wildcardValue   // Must come before others to match access*
     | colonValue      // Handle colon-separated values like o365:management:activity
@@ -470,6 +471,7 @@ bareValuePart
     : IDENTIFIER
     | NUMBER
     | DOTTED_NUMBER
+    | DIGIT_WORD
     | WILDCARD
     | keywordName
     ;
@@ -515,6 +517,7 @@ bareWord
     : IDENTIFIER
     | NUMBER
     | DOTTED_NUMBER
+    | DIGIT_WORD
     | QUOTED_STRING
     | REST_PATH      // Unquoted fulltext path/glob, e.g. /var/log/*
     | wildcardValue  // Allows bare * or *value patterns as search terms

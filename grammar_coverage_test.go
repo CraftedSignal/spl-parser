@@ -222,3 +222,26 @@ func TestOperatorKeywordValueNeedsQuotes(t *testing.T) {
 		}
 	}
 }
+
+// An unquoted value that starts with a digit (a file name, a hash, a hex
+// code) is one value, not a number or time span plus an invented _raw term.
+func TestDigitLeadingBareValue(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		want  []ExpectedCondition
+	}{
+		{`index=x process_name=7z.exe`, []ExpectedCondition{{"index", "=", "x"}, {"process_name", "=", "7z.exe"}}},
+		{`index=x hash=5d41402abc4b2a76b9719d911017c592`, []ExpectedCondition{{"index", "=", "x"}, {"hash", "=", "5d41402abc4b2a76b9719d911017c592"}}},
+		{`index=x id=0x1F status=ok`, []ExpectedCondition{{"index", "=", "x"}, {"id", "=", "0x1F"}, {"status", "=", "ok"}}},
+		{`index=x 7z.exe status=ok earliest=-5m`, []ExpectedCondition{{"index", "=", "x"}, {"_raw", "contains", "7z.exe"}, {"status", "=", "ok"}}},
+	} {
+		r := ExtractConditions(tc.query)
+		if len(r.Errors) != 0 || r.ExpressionIncomplete || len(r.Conditions) != len(tc.want) {
+			t.Errorf("%s: errors=%q incomplete=%v conditions=%s", tc.query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
+			continue
+		}
+		for _, want := range tc.want {
+			assertHasCondition(t, r.Conditions, want)
+		}
+	}
+}

@@ -98,6 +98,12 @@ NUMBER
     | '.' DIGIT+
     ;
 
+// Unquoted words that start with a digit: 7z.exe, 0x1F, an MD5 hash. A tie
+// with TIME_SPAN, listed earlier, keeps 5m and 1d as time spans.
+DIGIT_WORD
+    : DIGIT+ [a-zA-Z_] [a-zA-Z0-9_]* ('.' [a-zA-Z0-9_]+)*
+    ;
+
 fragment DIGIT : [0-9] ;
 
 // Wildcards and patterns
