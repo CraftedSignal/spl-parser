@@ -104,3 +104,29 @@ func hasCondition(conditions []Condition, field, operator, value string) bool {
 	}
 	return false
 }
+
+// An unquoted search value runs to the next whitespace, hyphens and other
+// punctuation included. The parts after the punctuation must not be dropped
+// together with the rest of the search.
+func TestBareValueKeepsPunctuation(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		want  []ExpectedCondition
+	}{
+		{`index=os-linux sourcetype=linux-secure action=failure`, []ExpectedCondition{{"index", "=", "os-linux"}, {"sourcetype", "=", "linux-secure"}, {"action", "=", "failure"}}},
+		{`index=x host=web-01 user=bob`, []ExpectedCondition{{"index", "=", "x"}, {"host", "=", "web-01"}, {"user", "=", "bob"}}},
+		{`index=x sourcetype=cisco-asa action=blocked`, []ExpectedCondition{{"index", "=", "x"}, {"sourcetype", "=", "cisco-asa"}, {"action", "=", "blocked"}}},
+		{`index=x user=john.doe@example.com action=x`, []ExpectedCondition{{"index", "=", "x"}, {"user", "=", "john.doe@example.com"}, {"action", "=", "x"}}},
+		{`index=x user=admin$ action=x`, []ExpectedCondition{{"index", "=", "x"}, {"user", "=", "admin$"}, {"action", "=", "x"}}},
+		{`index=x host=prod-* status=500`, []ExpectedCondition{{"index", "=", "x"}, {"host", "=", "prod-*"}, {"status", "=", "500"}}},
+	} {
+		r := ExtractConditions(tc.query)
+		if len(r.Errors) != 0 || r.ExpressionIncomplete || len(r.Conditions) != len(tc.want) {
+			t.Errorf("%s: errors=%q incomplete=%v conditions=%s", tc.query, r.Errors, r.ExpressionIncomplete, conditionSummary(r.Conditions))
+			continue
+		}
+		for _, want := range tc.want {
+			assertHasCondition(t, r.Conditions, want)
+		}
+	}
+}

@@ -244,6 +244,12 @@ type SPLParserListener interface {
 	// EnterValue is called when entering the value production.
 	EnterValue(c *ValueContext)
 
+	// EnterBareValue is called when entering the bareValue production.
+	EnterBareValue(c *BareValueContext)
+
+	// EnterBareValuePart is called when entering the bareValuePart production.
+	EnterBareValuePart(c *BareValuePartContext)
+
 	// EnterColonValue is called when entering the colonValue production.
 	EnterColonValue(c *ColonValueContext)
 
@@ -510,6 +516,12 @@ type SPLParserListener interface {
 
 	// ExitValue is called when exiting the value production.
 	ExitValue(c *ValueContext)
+
+	// ExitBareValue is called when exiting the bareValue production.
+	ExitBareValue(c *BareValueContext)
+
+	// ExitBareValuePart is called when exiting the bareValuePart production.
+	ExitBareValuePart(c *BareValuePartContext)
 
 	// ExitColonValue is called when exiting the colonValue production.
 	ExitColonValue(c *ColonValueContext)

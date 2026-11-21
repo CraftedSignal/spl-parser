@@ -323,6 +323,14 @@ func (v *BaseSPLParserVisitor) VisitValue(ctx *ValueContext) interface{} {
 	return v.VisitChildren(ctx)
 }
 
+func (v *BaseSPLParserVisitor) VisitBareValue(ctx *BareValueContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitBareValuePart(ctx *BareValuePartContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitColonValue(ctx *ColonValueContext) interface{} {
 	return v.VisitChildren(ctx)
 }

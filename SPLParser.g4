@@ -453,6 +453,21 @@ value
     | wildcardValue   // Must come before others to match access*
     | colonValue      // Handle colon-separated values like o365:management:activity
     | IDENTIFIER
+    | bareValue       // Must stay last: os-linux, web-01, admin$
+    ;
+
+// Unquoted search value that runs on through - . $ and @, e.g. os-linux, web-01,
+// john.doe@example.com, admin$, prod-*. The parser skips whitespace, so these
+// parts also join across it. Being the last value alternative, it applies only
+// where a shorter value cannot continue, so where/eval x=a-b keeps its parse.
+bareValue
+    : bareValuePart ((MINUS | DOT) bareValuePart | DOLLAR | TIME_MODIFIER)+
+    ;
+
+bareValuePart
+    : IDENTIFIER
+    | NUMBER
+    | WILDCARD
     ;
 
 // Colon-separated values (common in SPL for sourcetypes, eventtypes, etc.)
