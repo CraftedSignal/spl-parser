@@ -176,6 +176,12 @@ func (s *BaseSPLParserListener) EnterLookupCommand(ctx *LookupCommandContext) {}
 // ExitLookupCommand is called when production lookupCommand is exited.
 func (s *BaseSPLParserListener) ExitLookupCommand(ctx *LookupCommandContext) {}
 
+// EnterLookupField is called when production lookupField is entered.
+func (s *BaseSPLParserListener) EnterLookupField(ctx *LookupFieldContext) {}
+
+// ExitLookupField is called when production lookupField is exited.
+func (s *BaseSPLParserListener) ExitLookupField(ctx *LookupFieldContext) {}
+
 // EnterLookupOption is called when production lookupOption is entered.
 func (s *BaseSPLParserListener) EnterLookupOption(ctx *LookupOptionContext) {}
 

@@ -90,9 +90,9 @@ fieldsCommand
     : FIELDS (PLUS | MINUS)? fieldList
     ;
 
-// Rename command
+// Rename command (rename <wc-field> AS <wc-field>..., commas optional)
 renameCommand
-    : RENAME renameSpec (COMMA renameSpec)*
+    : RENAME renameSpec (COMMA? renameSpec)*
     ;
 
 renameSpec
@@ -155,9 +155,14 @@ rareCommand
     : RARE NUMBER? topOption* fieldList (BY fieldList)? topOption*
     ;
 
-// Lookup command
+// Lookup command: lookup <table> (<field> [AS <field>])... [OUTPUT | OUTPUTNEW
+// (<field> [AS <field>])...]. OUTPUT and OUTPUTNEW parse as list entries.
 lookupCommand
-    : LOOKUP lookupOption* IDENTIFIER fieldList
+    : LOOKUP lookupOption* IDENTIFIER lookupField+
+    ;
+
+lookupField
+    : fieldOrQuoted (AS fieldOrQuoted)?
     ;
 
 lookupOption
@@ -184,8 +189,9 @@ transactionCommand
     : TRANSACTION fieldList (transactionOption)*
     ;
 
+// startswith= and endswith= also take an unquoted search expression or eval(...)
 transactionOption
-    : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER | TIME_SPAN)
+    : IDENTIFIER EQ (QUOTED_STRING | fieldName comparisonOp value | functionCall | fieldName | NUMBER | TIME_SPAN)
     ;
 
 // Spath command
@@ -560,6 +566,7 @@ fieldNameSuffix
 
 fieldNameBase
     : IDENTIFIER (MINUS IDENTIFIER)*
+    | IDENTIFIER COLON COLON IDENTIFIER  // tag::host
     | FROM
     | keywordName
     ;

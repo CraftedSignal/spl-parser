@@ -85,6 +85,9 @@ type SPLParserVisitor interface {
 	// Visit a parse tree produced by SPLParser#lookupCommand.
 	VisitLookupCommand(ctx *LookupCommandContext) interface{}
 
+	// Visit a parse tree produced by SPLParser#lookupField.
+	VisitLookupField(ctx *LookupFieldContext) interface{}
+
 	// Visit a parse tree produced by SPLParser#lookupOption.
 	VisitLookupOption(ctx *LookupOptionContext) interface{}
 

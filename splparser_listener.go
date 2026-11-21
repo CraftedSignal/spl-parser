@@ -85,6 +85,9 @@ type SPLParserListener interface {
 	// EnterLookupCommand is called when entering the lookupCommand production.
 	EnterLookupCommand(c *LookupCommandContext)
 
+	// EnterLookupField is called when entering the lookupField production.
+	EnterLookupField(c *LookupFieldContext)
+
 	// EnterLookupOption is called when entering the lookupOption production.
 	EnterLookupOption(c *LookupOptionContext)
 
@@ -369,6 +372,9 @@ type SPLParserListener interface {
 
 	// ExitLookupCommand is called when exiting the lookupCommand production.
 	ExitLookupCommand(c *LookupCommandContext)
+
+	// ExitLookupField is called when exiting the lookupField production.
+	ExitLookupField(c *LookupFieldContext)
 
 	// ExitLookupOption is called when exiting the lookupOption production.
 	ExitLookupOption(c *LookupOptionContext)

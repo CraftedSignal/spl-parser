@@ -111,6 +111,10 @@ func (v *BaseSPLParserVisitor) VisitLookupCommand(ctx *LookupCommandContext) int
 	return v.VisitChildren(ctx)
 }
 
+func (v *BaseSPLParserVisitor) VisitLookupField(ctx *LookupFieldContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitLookupOption(ctx *LookupOptionContext) interface{} {
 	return v.VisitChildren(ctx)
 }

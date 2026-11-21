@@ -392,3 +392,19 @@ func TestAggregationSplitClausesParse(t *testing.T) {
 		t.Errorf("timechart with two functions: aggregations %+v", aggregations)
 	}
 }
+
+// lookup field AS field OUTPUT, the tag::<field>= search modifier, rename
+// pairs without commas and transaction filter strings.
+func TestFieldClausesParse(t *testing.T) {
+	assertNativeParse(t, `index=x | lookup dnslookup clientip AS src_ip OUTPUT clienthost | where marker=1`, "search", "lookup", "where")
+	assertNativeParse(t, `index=x | lookup usertogroup user as local_user OUTPUT group as user_group | where marker=1`, "search", "lookup", "where")
+	assertNativeParse(t, `index=x tag::host=web | where marker=1`, "search", "where")
+	assertNativeParse(t, `index=x | rename src_user AS "Actioned By" user AS User | where marker=1`, "search", "rename", "where")
+	assertNativeParse(t, `index=x | transaction user startswith=EventCode=4624 endswith=EventCode=4634 | where marker=1`, "search", "transaction", "where")
+	assertNativeParse(t, `index=x | transaction clientip endswith=eval(first!=last) | where marker=1`, "search", "transaction", "where")
+
+	assertHasCondition(t, ExtractConditions(`index=x tag::host=web`).Conditions, ExpectedCondition{"tag::host", "=", "web"})
+	if aliases := ExtractConditions(`index=x | rename src_user AS "Actioned By" user AS User`).FieldAliases; aliases["Actioned By"] != "src_user" || aliases["User"] != "user" {
+		t.Errorf("rename pairs without commas: FieldAliases %v", aliases)
+	}
+}
