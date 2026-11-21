@@ -460,3 +460,10 @@ func TestWildcardFieldNamesAndRestPathsParse(t *testing.T) {
 		t.Errorf("a wildcard table selector must leave the dataflow incomplete: %+v", r.Dataflow)
 	}
 }
+
+// A field name with spaces is quoted in sort and convert as it is in rename
+// and field lists (rename hammer as "12 hour blocks" | sort - "12 hour blocks").
+func TestQuotedFieldNamesInSortAndConvertParse(t *testing.T) {
+	assertNativeParse(t, `index=x | sort - "12 hour blocks" | where marker=1`, "search", "sort", "where")
+	assertNativeParse(t, `index=x | convert ctime("12 hour blocks") | where marker=1`, "search", "convert", "where")
+}

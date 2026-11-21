@@ -123,7 +123,7 @@ sortCommand
     ;
 
 sortField
-    : (PLUS | MINUS)? fieldName
+    : (PLUS | MINUS)? (fieldName | QUOTED_STRING)
     ;
 
 // Head command: head [<N>] [limit=<int>] [null=<bool>] [keeplast=<bool>]
@@ -277,7 +277,7 @@ convertOption
     ;
 
 convertFunction
-    : IDENTIFIER LPAREN fieldName RPAREN (AS (fieldName | QUOTED_STRING))?
+    : IDENTIFIER LPAREN (fieldName | QUOTED_STRING) RPAREN (AS (fieldName | QUOTED_STRING))?
     ;
 
 // Bucket/bin command: bin [<bin-options>...] <field> [AS <newfield>]; the
