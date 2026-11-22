@@ -61,6 +61,9 @@ type SPLParserVisitor interface {
 	// Visit a parse tree produced by SPLParser#sortCommand.
 	VisitSortCommand(ctx *SortCommandContext) interface{}
 
+	// Visit a parse tree produced by SPLParser#sortDirection.
+	VisitSortDirection(ctx *SortDirectionContext) interface{}
+
 	// Visit a parse tree produced by SPLParser#sortField.
 	VisitSortField(ctx *SortFieldContext) interface{}
 
