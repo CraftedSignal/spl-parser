@@ -554,7 +554,13 @@ func (b *splDataflowBuilder) stageCommand(ctx *PipelineStageContext, stage *Data
 
 func (b *splDataflowBuilder) stageEffect(ctx *PipelineStageContext, stage *DataflowStage, input string) {
 	switch {
-	case ctx.SearchCommand() != nil, ctx.WhereCommand() != nil:
+	case ctx.SearchCommand() != nil:
+		if searchHasIndexTimeModifier(ctx.SearchCommand(), ctx.SearchCommand(), b.budget) {
+			b.opaque(stage, input)
+			return
+		}
+		stage.Effect = "filter"
+	case ctx.WhereCommand() != nil:
 		stage.Effect = "filter"
 	case ctx.EvalCommand() != nil:
 		stage.Effect = "assign"

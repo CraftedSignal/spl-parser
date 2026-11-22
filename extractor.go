@@ -181,35 +181,36 @@ func IsCommandKeyword(field string) bool {
 type conditionExtractor struct {
 	budget *parseBudget
 	*BaseSPLParserListener
-	conditions        []Condition
-	conditionSources  conditionSourceBindings
-	scalarRoots       map[antlr.Tree]bool
-	scalarDepth       int
-	groupByFields     []string          // Fields from stats BY clauses
-	aggregations      []Aggregation     // Aggregations computed by stats-like commands
-	computedFields    map[string]string // Fields created by eval commands: computed field -> source field
-	fieldAliases      map[string]string // Rename mappings: new name -> original name
-	commands          []string          // Commands used in the query (stats, eventstats, etc.)
-	joins             []JoinInfo        // Extracted join info
-	subsearches       []*ParseResult    // Direct subsearch parse results
-	currentStage      int               // PipeStage of the owned stage being walked
-	nextStage         int               // advanced by every stage, subsearch stages included
-	stageNumbers      map[*PipelineStageContext]int
-	subsearchIndices  map[*SubsearchContext]int
-	dataflowOwners    []dataflowOwnerFrame
-	ownerByContext    map[antlr.ParserRuleContext]int
-	canonicalChildren map[antlr.ParserRuleContext]string
-	inSubsearch       int // depth of subsearch nesting
-	inFunctionCall    int // depth of function call nesting (eval, count, etc.)
-	inStatsFunction   int // depth of stats function nesting (count(), sum(), etc.)
-	inEvalCommand     int // depth of eval command expressions; assignments compute fields, they do not filter events
-	inWhereCommand    int // depth of where command predicates
-	negated           bool
-	lastLogicalOp     string
-	errors            []string
-	tokenStream       *antlr.CommonTokenStream // Needed to extract subsearch text
-	originalQuery     string                   // Original query string for text extraction
-	sourceMap         splSourceMap
+	conditions                 []Condition
+	conditionSources           conditionSourceBindings
+	scalarRoots                map[antlr.Tree]bool
+	scalarDepth                int
+	unsupportedIndexTimeSearch bool
+	groupByFields              []string          // Fields from stats BY clauses
+	aggregations               []Aggregation     // Aggregations computed by stats-like commands
+	computedFields             map[string]string // Fields created by eval commands: computed field -> source field
+	fieldAliases               map[string]string // Rename mappings: new name -> original name
+	commands                   []string          // Commands used in the query (stats, eventstats, etc.)
+	joins                      []JoinInfo        // Extracted join info
+	subsearches                []*ParseResult    // Direct subsearch parse results
+	currentStage               int               // PipeStage of the owned stage being walked
+	nextStage                  int               // advanced by every stage, subsearch stages included
+	stageNumbers               map[*PipelineStageContext]int
+	subsearchIndices           map[*SubsearchContext]int
+	dataflowOwners             []dataflowOwnerFrame
+	ownerByContext             map[antlr.ParserRuleContext]int
+	canonicalChildren          map[antlr.ParserRuleContext]string
+	inSubsearch                int // depth of subsearch nesting
+	inFunctionCall             int // depth of function call nesting (eval, count, etc.)
+	inStatsFunction            int // depth of stats function nesting (count(), sum(), etc.)
+	inEvalCommand              int // depth of eval command expressions; assignments compute fields, they do not filter events
+	inWhereCommand             int // depth of where command predicates
+	negated                    bool
+	lastLogicalOp              string
+	errors                     []string
+	tokenStream                *antlr.CommonTokenStream // Needed to extract subsearch text
+	originalQuery              string                   // Original query string for text extraction
+	sourceMap                  splSourceMap
 }
 
 // errorListener collects parse errors
@@ -1917,7 +1918,7 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 		rawConditions = append(rawConditions, condition)
 	}
 	unsupportedSearchOperand := hasUnsupportedSearchOperand(tree, budget)
-	incomplete := unsupportedSearchOperand || unparsed
+	incomplete := unsupportedSearchOperand || unparsed || extractor.unsupportedIndexTimeSearch
 	var rawExpression *ConditionExpression
 	if !incomplete {
 		var missingAtom bool
@@ -1930,12 +1931,14 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	if len(allErrors) > 0 && containsScalarExpression(expression) {
 		incomplete = true
 	} else if len(allErrors) > 0 {
-		if portableConditions := extractPortableSPLConditions(query, budget); len(portableConditions) > 0 {
-			conditions = portableConditions
-			expression = nil
-			recoveredWithPortableExtraction = true
+		if !extractor.unsupportedIndexTimeSearch {
+			if portableConditions := extractPortableSPLConditions(query, budget); len(portableConditions) > 0 {
+				conditions = portableConditions
+				expression = nil
+				recoveredWithPortableExtraction = true
+			}
 		}
-	} else if len(conditions) == 0 && !containsScalarExpression(expression) {
+	} else if len(conditions) == 0 && !containsScalarExpression(expression) && !extractor.unsupportedIndexTimeSearch {
 		if portableConditions := extractPortableSPLConditions(query, budget); len(portableConditions) > 0 {
 			conditions = portableConditions
 			expression = nil
@@ -3020,6 +3023,11 @@ func (e *conditionExtractor) EnterCondition(ctx *ConditionContext) {
 
 	// Eval assignments compute or transform fields; they are not predicates.
 	if e.inEvalCommand > 0 {
+		return
+	}
+
+	if indexTimeModifierSearch(ctx, e.budget) != nil {
+		e.unsupportedIndexTimeSearch = true
 		return
 	}
 

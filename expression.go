@@ -588,6 +588,9 @@ func classifyCondition(ctx IConditionContext, budget *parseBudget) predicateShap
 	if ctx == nil {
 		return predicateShape{}
 	}
+	if indexTimeModifierSearch(ctx, budget) != nil {
+		return predicateShape{}
+	}
 	if ctx.FieldName() != nil {
 		comparison := ctx.ComparisonOp() != nil && ctx.Value() != nil && ctx.GetChildCount() == 3 &&
 			ctx.GetChild(0) == ctx.FieldName() && ctx.GetChild(1) == ctx.ComparisonOp() && ctx.GetChild(2) == ctx.Value()
