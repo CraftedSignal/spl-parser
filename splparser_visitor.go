@@ -94,6 +94,12 @@ type SPLParserVisitor interface {
 	// Visit a parse tree produced by SPLParser#joinCommand.
 	VisitJoinCommand(ctx *JoinCommandContext) interface{}
 
+	// Visit a parse tree produced by SPLParser#joinAliasWhere.
+	VisitJoinAliasWhere(ctx *JoinAliasWhereContext) interface{}
+
+	// Visit a parse tree produced by SPLParser#joinAliasPair.
+	VisitJoinAliasPair(ctx *JoinAliasPairContext) interface{}
+
 	// Visit a parse tree produced by SPLParser#joinOption.
 	VisitJoinOption(ctx *JoinOptionContext) interface{}
 

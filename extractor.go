@@ -118,6 +118,7 @@ const (
 
 // JoinInfo captures the structured decomposition of a JOIN or APPEND command
 type JoinInfo struct {
+	Alias         *JoinAliasInfo    `json:"alias,omitempty"`
 	Type          string            `json:"type"`                     // "inner", "left", "outer" (default: "inner")
 	JoinFields    []string          `json:"join_fields,omitempty"`    // Fields to join ON (from fieldList)
 	Options       map[string]string `json:"options,omitempty"`        // All joinOption key=value pairs
@@ -186,6 +187,7 @@ type conditionExtractor struct {
 	scalarRoots                map[antlr.Tree]bool
 	scalarDepth                int
 	unsupportedIndexTimeSearch bool
+	aliasJoinActive            bool
 	groupByFields              []string          // Fields from stats BY clauses
 	aggregations               []Aggregation     // Aggregations computed by stats-like commands
 	computedFields             map[string]string // Fields created by eval commands: computed field -> source field
@@ -1900,6 +1902,13 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 	// Combine errors
 	allErrors := append(lexerErrors.errors, parserErrors.errors...)
 	allErrors = append(allErrors, extractor.errors...)
+	// A recovered alias prefix must not masquerade as a validated relation.
+	if len(allErrors) > 0 && extractor.aliasJoinActive {
+		for i := range extractor.joins {
+			budget.step()
+			extractor.joins[i].Alias = nil
+		}
+	}
 	var dataflow *QueryDataflow
 	var dataflowWarnings []string
 	if len(allErrors) == 0 {
@@ -1962,7 +1971,7 @@ func extractConditionsInternal(query string, budget *parseBudget) (result *Parse
 		conditions, indexMap = deduplicateConditionsWithIndexMap(combined, budget)
 		expression = remapConditionExpression(expression, indexMap, budget)
 	}
-	if recoveredWithPortableExtraction && !containsScalarExpression(expression) {
+	if recoveredWithPortableExtraction && !containsScalarExpression(expression) && !extractor.aliasJoinActive {
 		allErrors = nil
 		// The regex recovery cannot vouch for the syntax the grammar rejected.
 		incomplete = true
@@ -2089,6 +2098,10 @@ func (e *conditionExtractor) EnterJoinCommand(ctx *JoinCommandContext) {
 		}
 	}
 
+	clause := e.joinAliasClause(ctx)
+	aliasClause := e.hasJoinAliasClause(ctx, clause)
+	info.Alias = e.extractJoinAlias(ctx, clause, aliasClause)
+
 	// Extract join fields (the ON fields from fieldList)
 	if ctx.FieldList() != nil {
 		for _, foq := range ctx.FieldList().AllFieldOrQuoted() {
@@ -2114,7 +2127,9 @@ func (e *conditionExtractor) EnterJoinCommand(ctx *JoinCommandContext) {
 		subText := e.extractSubsearchText(ctx.Subsearch().(*SubsearchContext))
 		if subText != "" {
 			info.Subsearch = extractConditionsInternal(subText, e.budget)
-			info.ExposedFields = deriveExposedFields(info.Subsearch, info.JoinFields)
+			if !aliasClause {
+				info.ExposedFields = deriveExposedFields(info.Subsearch, info.JoinFields)
+			}
 		}
 	}
 
@@ -2204,6 +2219,13 @@ func deriveExposedFields(subResult *ParseResult, joinFields []string) []string {
 func ClassifyFieldProvenance(result *ParseResult, field string) FieldProvenance {
 	if result == nil || len(result.Joins) == 0 {
 		return ProvenanceAmbiguous
+	}
+
+	// Alias relations cannot establish unqualified same-record provenance.
+	for _, join := range result.Joins {
+		if join.Alias != nil {
+			return ProvenanceAmbiguous
+		}
 	}
 
 	// Check join keys first (they exist on both sides)

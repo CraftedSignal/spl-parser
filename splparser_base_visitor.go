@@ -123,6 +123,14 @@ func (v *BaseSPLParserVisitor) VisitJoinCommand(ctx *JoinCommandContext) interfa
 	return v.VisitChildren(ctx)
 }
 
+func (v *BaseSPLParserVisitor) VisitJoinAliasWhere(ctx *JoinAliasWhereContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
+func (v *BaseSPLParserVisitor) VisitJoinAliasPair(ctx *JoinAliasPairContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitJoinOption(ctx *JoinOptionContext) interface{} {
 	return v.VisitChildren(ctx)
 }

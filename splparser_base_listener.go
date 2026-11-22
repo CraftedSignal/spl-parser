@@ -194,6 +194,18 @@ func (s *BaseSPLParserListener) EnterJoinCommand(ctx *JoinCommandContext) {}
 // ExitJoinCommand is called when production joinCommand is exited.
 func (s *BaseSPLParserListener) ExitJoinCommand(ctx *JoinCommandContext) {}
 
+// EnterJoinAliasWhere is called when production joinAliasWhere is entered.
+func (s *BaseSPLParserListener) EnterJoinAliasWhere(ctx *JoinAliasWhereContext) {}
+
+// ExitJoinAliasWhere is called when production joinAliasWhere is exited.
+func (s *BaseSPLParserListener) ExitJoinAliasWhere(ctx *JoinAliasWhereContext) {}
+
+// EnterJoinAliasPair is called when production joinAliasPair is entered.
+func (s *BaseSPLParserListener) EnterJoinAliasPair(ctx *JoinAliasPairContext) {}
+
+// ExitJoinAliasPair is called when production joinAliasPair is exited.
+func (s *BaseSPLParserListener) ExitJoinAliasPair(ctx *JoinAliasPairContext) {}
+
 // EnterJoinOption is called when production joinOption is entered.
 func (s *BaseSPLParserListener) EnterJoinOption(ctx *JoinOptionContext) {}
 

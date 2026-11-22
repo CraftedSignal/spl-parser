@@ -35,6 +35,7 @@ type SemanticExpression struct {
 
 // SemanticJoin is the parser-owned semantic view of an SPL join or append.
 type SemanticJoin struct {
+	Alias         *JoinAliasInfo    `json:"alias,omitempty"`
 	Type          string            `json:"type"`
 	JoinFields    []string          `json:"join_fields,omitempty"`
 	Options       map[string]string `json:"options,omitempty"`
@@ -208,6 +209,7 @@ func semanticJoinsFromParseJoins(joins []JoinInfo, budget *parseBudget) []Semant
 	for _, join := range joins {
 		budget.step()
 		out = append(out, SemanticJoin{
+			Alias:         cloneJoinAlias(join.Alias, budget),
 			Type:          join.Type,
 			JoinFields:    cloneSemanticStrings(join.JoinFields, budget),
 			Options:       cloneSemanticStringMap(join.Options, budget),

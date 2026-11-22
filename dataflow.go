@@ -788,6 +788,23 @@ func (b *splDataflowBuilder) stageEffect(ctx *PipelineStageContext, stage *Dataf
 			}
 			b.budget.reserveOutput(1)
 			stage.Inputs = append(stage.Inputs, ScopeReference{QueryPath: path, ScopeID: child.Dataflow.OutputScopeID})
+			if alias := b.extractor.joins[joinIndex].Alias; alias != nil {
+				_, leftKnown := b.scopeIndex[stage.Inputs[0].ScopeID]
+				rightKnown := false
+				for _, scope := range child.Dataflow.Scopes {
+					b.budget.step()
+					if scope.ID == stage.Inputs[1].ScopeID {
+						rightKnown = true
+						break
+					}
+				}
+				if !leftKnown || !rightKnown || stage.Inputs[0].ScopeID == "" || stage.Inputs[1].ScopeID == "" {
+					b.diagnostic("join_alias_inputs_unavailable", stage.ID, "alias join input scopes unavailable")
+					break
+				}
+				b.budget.reserveOutput(2)
+				alias.LeftInput, alias.RightInput = stage.Inputs[0], stage.Inputs[1]
+			}
 		}
 	default:
 		b.opaque(stage, input)
