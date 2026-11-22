@@ -671,6 +671,26 @@ func (b *splDataflowBuilder) stageEffect(ctx *PipelineStageContext, stage *Dataf
 		case ctx.StreamstatsCommand() != nil:
 			functions, groups = ctx.StreamstatsCommand().AllStatsFunction(), ctx.StreamstatsCommand().FieldList()
 		}
+		if stage.Command == "stats" {
+			// A bare non-count function means implicit wildcard aggregation.
+			// Its output fields depend on the input schema, so inspect the
+			// entire stage before publishing any finite group/metric bindings.
+			for _, fn := range functions {
+				b.budget.step()
+				if fn.LPAREN() == nil && fn.Expression() == nil && fn.IDENTIFIER() != nil {
+					token := fn.IDENTIFIER().GetSymbol()
+					// Identifier tokens are ASCII; reserve the comparison's
+					// source materialization/scan before reading its text.
+					for i := token.GetStart(); i <= token.GetStop(); i++ {
+						b.budget.step()
+					}
+					if !strings.EqualFold(token.GetText(), "count") {
+						b.opaque(stage, input)
+						return
+					}
+				}
+			}
+		}
 		for _, aggregation := range b.extractor.aggregations {
 			b.budget.step()
 			if aggregation.PipeStage == stage.PipeStage && aggregation.Command == stage.Command &&

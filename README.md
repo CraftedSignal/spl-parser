@@ -103,6 +103,11 @@ predicate coverage, and `SemanticQuery` carries it unchanged. A complete
 dataflow describes binding and rowset order; it does not certify that a
 backend can evaluate every expression or command. `Aggregations` are also
 available on `SemanticQuery` with the same stage and binding IDs.
+Bare non-count `stats` functions, such as `stats avg`, imply wildcard
+aggregation over incoming fields. Their schema-dependent output inventory
+makes the stage opaque; the legacy aggregation summary remains available
+without claiming a graph binding. Bare `stats count` and explicit-field
+aggregates such as `stats avg(bytes)` retain their existing scope behavior.
 
 `ComputedFields` and `FieldAliases` summarize final names for compatibility.
 Use the per-occurrence binding references for historical field lookup.
