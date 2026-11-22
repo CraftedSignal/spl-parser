@@ -192,8 +192,15 @@ lookupOption
 
 // Join command with subsearch
 joinCommand
-    : JOIN joinOption* subsearch
-    | JOIN joinOption* fieldList subsearch
+    : JOIN joinOption* (joinAliasWhere | fieldList)? subsearch
+    ;
+
+joinAliasWhere
+    : WHERE joinAliasPair+
+    ;
+
+joinAliasPair
+    : fieldOrQuoted EQ fieldOrQuoted
     ;
 
 joinOption

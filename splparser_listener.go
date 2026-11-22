@@ -94,6 +94,12 @@ type SPLParserListener interface {
 	// EnterJoinCommand is called when entering the joinCommand production.
 	EnterJoinCommand(c *JoinCommandContext)
 
+	// EnterJoinAliasWhere is called when entering the joinAliasWhere production.
+	EnterJoinAliasWhere(c *JoinAliasWhereContext)
+
+	// EnterJoinAliasPair is called when entering the joinAliasPair production.
+	EnterJoinAliasPair(c *JoinAliasPairContext)
+
 	// EnterJoinOption is called when entering the joinOption production.
 	EnterJoinOption(c *JoinOptionContext)
 
@@ -381,6 +387,12 @@ type SPLParserListener interface {
 
 	// ExitJoinCommand is called when exiting the joinCommand production.
 	ExitJoinCommand(c *JoinCommandContext)
+
+	// ExitJoinAliasWhere is called when exiting the joinAliasWhere production.
+	ExitJoinAliasWhere(c *JoinAliasWhereContext)
+
+	// ExitJoinAliasPair is called when exiting the joinAliasPair production.
+	ExitJoinAliasPair(c *JoinAliasPairContext)
 
 	// ExitJoinOption is called when exiting the joinOption production.
 	ExitJoinOption(c *JoinOptionContext)
