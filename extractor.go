@@ -2536,15 +2536,19 @@ func (e *conditionExtractor) extractByFields(fieldList IFieldListContext) {
 			field := fieldOrQuoted.FieldName().GetText()
 			fieldLower := strings.ToLower(field)
 			if !isExcludedField(fieldLower) {
+				e.budget.outputSize(len(e.groupByFields) + 1)
 				e.groupByFields = append(e.groupByFields, field)
 			}
 		} else if fieldOrQuoted.QUOTED_STRING() != nil {
-			// Handle quoted field name
-			field := fieldOrQuoted.QUOTED_STRING().GetText()
-			// Remove quotes
-			field = strings.Trim(field, `"'`)
+			field := trimMatchingQuotes(fieldOrQuoted.QUOTED_STRING().GetText())
+			// Charge the decode buffer before allocation, using the shared request budget.
+			for range len(field) {
+				e.budget.step()
+			}
+			field = decodeSPLQuotedOperand(field)
 			fieldLower := strings.ToLower(field)
 			if !isExcludedField(fieldLower) {
+				e.budget.outputSize(len(e.groupByFields) + 1)
 				e.groupByFields = append(e.groupByFields, field)
 			}
 		}
