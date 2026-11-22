@@ -15,6 +15,15 @@ A production-ready Go parser for Splunk Processing Language (SPL), built with AN
 - **Error Recovery**: Graceful handling of malformed queries with detailed error reporting
 - **High Performance**: Optimized for processing large volumes of queries
 
+Direct lower-case unquoted `_index_earliest=...` and `_index_latest=...`
+search modifiers describe an index-time window that this model does not
+represent. Their owning search stage is opaque/incomplete and its whole Boolean
+expression is unavailable; they are not event-field predicates. Authored stage
+source and best-effort sibling conditions remain available, without claiming
+that OR siblings are necessary facts. Existing ordinary earliest/latest
+projection, genuine `_indextime` fields, quoted raw phrases and where/eval
+field roles are unchanged. This does not evaluate a time window.
+
 ## Installation
 
 ```bash
