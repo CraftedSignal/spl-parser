@@ -671,7 +671,7 @@ func (b *splDataflowBuilder) stageEffect(ctx *PipelineStageContext, stage *Dataf
 		case ctx.StreamstatsCommand() != nil:
 			functions, groups = ctx.StreamstatsCommand().AllStatsFunction(), ctx.StreamstatsCommand().FieldList()
 		}
-		if stage.Command == "stats" {
+		if stage.Command == "stats" || stage.Command == "eventstats" || stage.Command == "streamstats" {
 			// A bare non-count function means implicit wildcard aggregation.
 			// Its output fields depend on the input schema, so inspect the
 			// entire stage before publishing any finite group/metric bindings.
