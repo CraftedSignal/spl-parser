@@ -3689,14 +3689,17 @@ func classifyPipelineStagesInternal(query string, budget *parseBudget) []Pipelin
 	preflight(query, budget, false, nil)
 	normalizedQuery, sourceMap := normalizeSPLQueryMapped(query, budget)
 	budget.input(normalizedQuery)
-	stream := preflight(normalizedQuery, budget, true, nil)
+	lexerErrors := &errorListener{budget: budget}
+	stream := preflight(normalizedQuery, budget, true, lexerErrors)
 	parser := NewSPLParser(&budgetTokenStream{CommonTokenStream: stream, budget: budget})
 	parser.RemoveErrorListeners()
+	parserErrors := &errorListener{budget: budget}
+	parser.AddErrorListener(parserErrors)
 
 	root := parser.Root()
 
 	budget.check()
-	if hasUnparsedTail(root) {
+	if len(lexerErrors.errors) > 0 || len(parserErrors.errors) > 0 || hasUnparsedTail(root) {
 		return nil
 	}
 	stages := root.Query().AllPipelineStage()
