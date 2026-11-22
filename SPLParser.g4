@@ -2,6 +2,27 @@ parser grammar SPLParser;
 
 options { tokenVocab=SPLLexer; }
 
+@members {
+// Keep the documented option local to mvexpand, without a global keyword.
+func (p *SPLParser) isMvexpandLimit() bool {
+    name := p.GetTokenStream().LT(1).GetText()
+    if len(name) != 5 {
+        return false
+    }
+    for i, c := range []byte("limit") {
+        if name[i] | 0x20 != c {
+            return false
+        }
+    }
+    for _, c := range p.GetTokenStream().LT(3).GetText() {
+        if c < '0' || c > '9' {
+            return false
+        }
+    }
+    return true
+}
+}
+
 // Entry point: a query must span the whole input. subsearch reuses query
 // inside brackets, so the end-of-input check lives in its own rule.
 root
@@ -252,9 +273,10 @@ makemvOption
     : IDENTIFIER EQ (QUOTED_STRING | fieldName | NUMBER)
     ;
 
-// Mvexpand command
+// Mvexpand command: mvexpand <field> [limit=<nonnegative integer>]
 mvexpandCommand
     : MVEXPAND fieldName
+      ({p.isMvexpandLimit()}? IDENTIFIER EQ NUMBER)?
     ;
 
 // Format command
