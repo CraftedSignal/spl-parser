@@ -36,6 +36,18 @@ func (p *SPLParser) isSortFieldWrapper() bool {
         return false
     }
 }
+
+// Direction is contextual after the mandatory sort field list.
+func (p *SPLParser) isSortDirection() bool {
+    token := p.GetTokenStream().LT(1)
+    width := token.GetStop() - token.GetStart() + 1
+    if width != 1 && width != 4 {
+        return false
+    }
+    text := token.GetText()
+    return text == "d" || text == "desc"
+}
+
 }
 
 // Entry point: a query must span the whole input. subsearch reuses query
@@ -155,7 +167,11 @@ dedupOption
 
 // Sort command: sort [<count> | limit=<int>] <sort-by-clause>, ...
 sortCommand
-    : SORT (NUMBER | IDENTIFIER EQ NUMBER)? sortField (COMMA sortField)*
+    : SORT (NUMBER | IDENTIFIER EQ NUMBER)? sortField (COMMA sortField)* sortDirection?
+    ;
+
+sortDirection
+    : {p.isSortDirection()}? IDENTIFIER
     ;
 
 sortField

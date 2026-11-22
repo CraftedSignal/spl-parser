@@ -128,6 +128,12 @@ func (s *BaseSPLParserListener) EnterSortCommand(ctx *SortCommandContext) {}
 // ExitSortCommand is called when production sortCommand is exited.
 func (s *BaseSPLParserListener) ExitSortCommand(ctx *SortCommandContext) {}
 
+// EnterSortDirection is called when production sortDirection is entered.
+func (s *BaseSPLParserListener) EnterSortDirection(ctx *SortDirectionContext) {}
+
+// ExitSortDirection is called when production sortDirection is exited.
+func (s *BaseSPLParserListener) ExitSortDirection(ctx *SortDirectionContext) {}
+
 // EnterSortField is called when production sortField is entered.
 func (s *BaseSPLParserListener) EnterSortField(ctx *SortFieldContext) {}
 
