@@ -64,6 +64,9 @@ type SPLParserListener interface {
 	// EnterSortField is called when entering the sortField production.
 	EnterSortField(c *SortFieldContext)
 
+	// EnterSortFieldWrapper is called when entering the sortFieldWrapper production.
+	EnterSortFieldWrapper(c *SortFieldWrapperContext)
+
 	// EnterHeadCommand is called when entering the headCommand production.
 	EnterHeadCommand(c *HeadCommandContext)
 
@@ -357,6 +360,9 @@ type SPLParserListener interface {
 
 	// ExitSortField is called when exiting the sortField production.
 	ExitSortField(c *SortFieldContext)
+
+	// ExitSortFieldWrapper is called when exiting the sortFieldWrapper production.
+	ExitSortFieldWrapper(c *SortFieldWrapperContext)
 
 	// ExitHeadCommand is called when exiting the headCommand production.
 	ExitHeadCommand(c *HeadCommandContext)

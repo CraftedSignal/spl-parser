@@ -134,6 +134,12 @@ func (s *BaseSPLParserListener) EnterSortField(ctx *SortFieldContext) {}
 // ExitSortField is called when production sortField is exited.
 func (s *BaseSPLParserListener) ExitSortField(ctx *SortFieldContext) {}
 
+// EnterSortFieldWrapper is called when production sortFieldWrapper is entered.
+func (s *BaseSPLParserListener) EnterSortFieldWrapper(ctx *SortFieldWrapperContext) {}
+
+// ExitSortFieldWrapper is called when production sortFieldWrapper is exited.
+func (s *BaseSPLParserListener) ExitSortFieldWrapper(ctx *SortFieldWrapperContext) {}
+
 // EnterHeadCommand is called when production headCommand is entered.
 func (s *BaseSPLParserListener) EnterHeadCommand(ctx *HeadCommandContext) {}
 

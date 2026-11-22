@@ -83,6 +83,10 @@ func (v *BaseSPLParserVisitor) VisitSortField(ctx *SortFieldContext) interface{}
 	return v.VisitChildren(ctx)
 }
 
+func (v *BaseSPLParserVisitor) VisitSortFieldWrapper(ctx *SortFieldWrapperContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitHeadCommand(ctx *HeadCommandContext) interface{} {
 	return v.VisitChildren(ctx)
 }

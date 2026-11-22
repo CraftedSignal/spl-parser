@@ -64,6 +64,9 @@ type SPLParserVisitor interface {
 	// Visit a parse tree produced by SPLParser#sortField.
 	VisitSortField(ctx *SortFieldContext) interface{}
 
+	// Visit a parse tree produced by SPLParser#sortFieldWrapper.
+	VisitSortFieldWrapper(ctx *SortFieldWrapperContext) interface{}
+
 	// Visit a parse tree produced by SPLParser#headCommand.
 	VisitHeadCommand(ctx *HeadCommandContext) interface{}
 
