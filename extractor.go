@@ -2090,9 +2090,17 @@ func (e *conditionExtractor) EnterJoinCommand(ctx *JoinCommandContext) {
 	if ctx.FieldList() != nil {
 		for _, foq := range ctx.FieldList().AllFieldOrQuoted() {
 			if foq.FieldName() != nil {
+				e.budget.outputSize(len(info.JoinFields) + 1)
 				info.JoinFields = append(info.JoinFields, foq.FieldName().GetText())
 			} else if foq.QUOTED_STRING() != nil {
-				info.JoinFields = append(info.JoinFields, strings.Trim(foq.QUOTED_STRING().GetText(), "\"'"))
+				field := trimMatchingQuotes(foq.QUOTED_STRING().GetText())
+				// Reserve decoding work before allocating the field identity.
+				for range len(field) {
+					e.budget.step()
+				}
+				field = decodeSPLQuotedOperand(field)
+				e.budget.outputSize(len(info.JoinFields) + 1)
+				info.JoinFields = append(info.JoinFields, field)
 			}
 		}
 	}
