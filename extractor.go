@@ -2652,15 +2652,73 @@ func (e *conditionExtractor) EnterSortCommand(ctx *SortCommandContext) {
 	if !e.ownsDataflow(ctx) {
 		return
 	}
-	for _, sortField := range ctx.AllSortField() {
-		if sortField.FieldName() != nil {
-			field := sortField.FieldName().GetText()
-			fieldLower := strings.ToLower(field)
-			if !isExcludedField(fieldLower) {
-				e.groupByFields = append(e.groupByFields, field)
+	for _, child := range ctx.GetChildren() {
+		e.budget.step()
+		item, ok := child.(ISortFieldContext)
+		if !ok {
+			continue
+		}
+		field := e.sortFieldIdentity(item)
+		if field == "" {
+			continue
+		}
+		for range len(field) {
+			e.budget.step()
+		}
+		if !isExcludedField(strings.ToLower(field)) {
+			e.budget.outputSize(len(e.groupByFields) + 1)
+			e.groupByFields = append(e.groupByFields, field)
+		}
+	}
+}
+
+// Read only the single direct field or the field owned by the dedicated
+// wrapper rule. No recursive expression/function search can bless other calls.
+func (e *conditionExtractor) sortFieldIdentity(item ISortFieldContext) string {
+	for _, child := range item.GetChildren() {
+		e.budget.step()
+		if field, ok := child.(IFieldOrQuotedContext); ok {
+			return e.sortFieldOperandIdentity(field)
+		}
+		if wrapper, ok := child.(ISortFieldWrapperContext); ok {
+			for _, node := range wrapper.GetChildren() {
+				e.budget.step()
+				if field, ok := node.(IFieldOrQuotedContext); ok {
+					return e.sortFieldOperandIdentity(field)
+				}
 			}
 		}
 	}
+	return ""
+}
+
+func (e *conditionExtractor) sortFieldOperandIdentity(field IFieldOrQuotedContext) string {
+	// Charge before GetText can join tokens or materialize a quoted value.
+	width := len(e.sourceOf(field))
+	if width == 0 && field.GetStart() != nil && field.GetStop() != nil {
+		// Direct listener fixtures may lack an authored source map.
+		width = field.GetStop().GetStop() - field.GetStart().GetStart() + 1
+	}
+	if width <= 0 {
+		return ""
+	}
+	for range width {
+		e.budget.step()
+	}
+	for _, child := range field.GetChildren() {
+		e.budget.step()
+		if raw, ok := child.(IFieldNameContext); ok {
+			return raw.GetText()
+		}
+		if quoted, ok := child.(antlr.TerminalNode); ok && quoted.GetSymbol().GetTokenType() == SPLParserQUOTED_STRING {
+			text := trimMatchingQuotes(quoted.GetText())
+			for range len(text) {
+				e.budget.step()
+			}
+			return decodeSPLQuotedOperand(text)
+		}
+	}
+	return ""
 }
 
 // EnterEvalCommand tracks eval commands

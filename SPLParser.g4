@@ -21,6 +21,21 @@ func (p *SPLParser) isMvexpandLimit() bool {
     }
     return true
 }
+
+// Comparison wrappers are local sort syntax, not arbitrary eval calls.
+func (p *SPLParser) isSortFieldWrapper() bool {
+    token := p.GetTokenStream().LT(1)
+    width := token.GetStop() - token.GetStart() + 1
+    if width < 2 || width > 4 {
+        return false
+    }
+    switch token.GetText() {
+    case "auto", "str", "ip", "num":
+        return true
+    default:
+        return false
+    }
+}
 }
 
 // Entry point: a query must span the whole input. subsearch reuses query
@@ -144,7 +159,11 @@ sortCommand
     ;
 
 sortField
-    : (PLUS | MINUS)? (fieldName | QUOTED_STRING)
+    : (PLUS | MINUS)? (sortFieldWrapper | fieldOrQuoted)
+    ;
+
+sortFieldWrapper
+    : {p.isSortFieldWrapper()}? IDENTIFIER LPAREN fieldOrQuoted RPAREN
     ;
 
 // Head command: head [<N>] [limit=<int>] [null=<bool>] [keeplast=<bool>]
