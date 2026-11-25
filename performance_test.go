@@ -17,3 +17,12 @@ func BenchmarkExtractTstatsDatamodelValue(b *testing.B) {
 		_ = extractTstatsDatamodelValue(segment)
 	}
 }
+
+func BenchmarkExtractCollectOptionValues(b *testing.B) {
+	command := `collect index=summary source="alert source"`
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = extractOptionValue(command, "index")
+		_ = extractOptionValue(command, "source")
+	}
+}
