@@ -682,9 +682,10 @@ func extractPortablePredicatesFromText(text string, stage int, budget *parseBudg
 	budget.step()
 
 	text = stripBracketedSubsearches(text)
+	quoted := quotedSPLBytes(text, budget)
 	var matches []portableConditionMatch
 	seenSpans := make([][2]int, 0)
-	for _, match := range portableInConditionPattern.FindAllStringSubmatchIndex(text, -1) {
+	for _, match := range findPortablePredicateMatches(text, portableInConditionPattern, quoted) {
 		budget.step()
 
 		portableMatch := portableInMatch(text, match, stage)
@@ -692,7 +693,7 @@ func extractPortablePredicatesFromText(text string, stage int, budget *parseBudg
 		matches = append(matches, portableMatch)
 		seenSpans = append(seenSpans, [2]int{portableMatch.start, portableMatch.end})
 	}
-	for _, match := range portableFunctionInConditionPattern.FindAllStringSubmatchIndex(text, -1) {
+	for _, match := range findPortablePredicateMatches(text, portableFunctionInConditionPattern, quoted) {
 		budget.step()
 
 		if spanOverlaps(match[0], match[1], seenSpans) {
@@ -703,7 +704,7 @@ func extractPortablePredicatesFromText(text string, stage int, budget *parseBudg
 		matches = append(matches, portableMatch)
 		seenSpans = append(seenSpans, [2]int{portableMatch.start, portableMatch.end})
 	}
-	for _, match := range portableNetIPSubnetPattern.FindAllStringSubmatchIndex(text, -1) {
+	for _, match := range findPortablePredicateMatches(text, portableNetIPSubnetPattern, quoted) {
 		budget.step()
 
 		if spanOverlaps(match[0], match[1], seenSpans) {
@@ -731,7 +732,7 @@ func extractPortablePredicatesFromText(text string, stage int, budget *parseBudg
 		})
 		seenSpans = append(seenSpans, [2]int{match[0], match[1]})
 	}
-	for _, match := range portableCidrMatchPattern.FindAllStringSubmatchIndex(text, -1) {
+	for _, match := range findPortablePredicateMatches(text, portableCidrMatchPattern, quoted) {
 		budget.step()
 
 		if spanOverlaps(match[0], match[1], seenSpans) {
@@ -756,7 +757,7 @@ func extractPortablePredicatesFromText(text string, stage int, budget *parseBudg
 		})
 		seenSpans = append(seenSpans, [2]int{match[0], match[1]})
 	}
-	for _, match := range portableNullFunctionPattern.FindAllStringSubmatchIndex(text, -1) {
+	for _, match := range findPortablePredicateMatches(text, portableNullFunctionPattern, quoted) {
 		budget.step()
 
 		if spanOverlaps(match[0], match[1], seenSpans) {
@@ -779,7 +780,7 @@ func extractPortablePredicatesFromText(text string, stage int, budget *parseBudg
 		})
 		seenSpans = append(seenSpans, [2]int{match[0], match[1]})
 	}
-	for _, match := range portableComparisonPattern.FindAllStringSubmatchIndex(text, -1) {
+	for _, match := range findPortablePredicateMatches(text, portableComparisonPattern, quoted) {
 		budget.step()
 
 		if spanOverlaps(match[0], match[1], seenSpans) {
@@ -790,7 +791,7 @@ func extractPortablePredicatesFromText(text string, stage int, budget *parseBudg
 		matches = append(matches, portableMatch)
 		seenSpans = append(seenSpans, [2]int{portableMatch.start, portableMatch.end})
 	}
-	for _, match := range portableFunctionComparisonPattern.FindAllStringSubmatchIndex(text, -1) {
+	for _, match := range findPortablePredicateMatches(text, portableFunctionComparisonPattern, quoted) {
 		budget.step()
 
 		if spanOverlaps(match[0], match[1], seenSpans) {
@@ -822,6 +823,47 @@ func extractPortablePredicatesFromText(text string, stage int, budget *parseBudg
 		conditions = budget.appendConditions(conditions, match.cond)
 	}
 	return conditions
+}
+
+func findPortablePredicateMatches(text string, pattern *regexp.Regexp, quoted []bool) [][]int {
+	matches := pattern.FindAllStringSubmatchIndex(text, -1)
+	filtered := matches[:0]
+	for _, match := range matches {
+		if match[0] < len(quoted) && quoted[match[0]] {
+			continue
+		}
+		filtered = append(filtered, match)
+	}
+	return filtered
+}
+
+func quotedSPLBytes(text string, budget *parseBudget) []bool {
+	quoted := make([]bool, len(text))
+	inString := false
+	var quote byte
+	escaped := false
+	for i := 0; i < len(text); i++ {
+		budget.step()
+		c := text[i]
+		if inString {
+			quoted[i] = true
+			if c == '\\' {
+				escaped = !escaped
+				continue
+			}
+			if c == quote && !escaped {
+				inString = false
+			}
+			escaped = false
+			continue
+		}
+		if c == '"' || c == '\'' {
+			inString = true
+			quote = c
+			quoted[i] = true
+		}
+	}
+	return quoted
 }
 
 func stripBracketedSubsearches(text string) string {
@@ -1270,7 +1312,6 @@ func startsWithEmbeddedTransformCommand(lower string) bool {
 }
 
 func normalizeEmbeddedPredicateText(text string) string {
-	text = decodeEscapedQuotes(text)
 	text = strings.ReplaceAll(text, "\r\n", " ")
 	text = strings.ReplaceAll(text, "\n", " ")
 	text = strings.ReplaceAll(text, "\t", " ")
@@ -1366,14 +1407,41 @@ func extractQuotedSearchValues(text string) []string {
 
 func decodeSPLStringLiteral(literal string) string {
 	literal = strings.TrimSpace(literal)
+	quote := byte(0)
 	if len(literal) >= 2 {
 		first := literal[0]
 		last := literal[len(literal)-1]
 		if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+			quote = first
 			literal = literal[1 : len(literal)-1]
 		}
 	}
-	return decodeEscapedQuotes(literal)
+	if quote == 0 {
+		quote = '"'
+	}
+	var decoded strings.Builder
+	decoded.Grow(len(literal))
+	for i := 0; i < len(literal); i++ {
+		if literal[i] != '\\' {
+			decoded.WriteByte(literal[i])
+			continue
+		}
+		end := i
+		for end < len(literal) && literal[end] == '\\' {
+			end++
+		}
+		if end < len(literal) && literal[end] == quote {
+			decoded.WriteString(strings.Repeat(`\`, (end-i)/2))
+			if (end-i)%2 == 1 {
+				decoded.WriteByte(quote)
+				end++
+			}
+		} else {
+			decoded.WriteString(literal[i:end])
+		}
+		i = end - 1
+	}
+	return decoded.String()
 }
 
 func decodeEscapedQuotes(value string) string {
