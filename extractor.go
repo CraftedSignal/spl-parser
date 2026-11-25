@@ -557,6 +557,7 @@ var (
 	portableCidrMatchPattern           = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT\b|!)\s*)?cidrmatch\s*\(\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:[^\s),\]]+))\s*,\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)`)
 	portableNullFunctionPattern        = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT\b|!)\s*)?(isnotnull|isnull)\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)`)
 	quotedOptionValuePattern           = `(?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')`
+	quotedSearchValuePattern           = regexp.MustCompile(`(?is)\bsearch\s*=\s*(` + quotedOptionValuePattern + `)`)
 )
 
 func extractPortableSPLConditions(query string, budget *parseBudget) []Condition {
@@ -1352,8 +1353,7 @@ func extractLDAPSearchConditions(query string, budget *parseBudget) []Condition 
 }
 
 func extractQuotedSearchValues(text string) []string {
-	pattern := regexp.MustCompile(`(?is)\bsearch\s*=\s*(` + quotedOptionValuePattern + `)`)
-	matches := pattern.FindAllStringSubmatchIndex(text, -1)
+	matches := quotedSearchValuePattern.FindAllStringSubmatchIndex(text, -1)
 	values := make([]string, 0, len(matches))
 	for _, match := range matches {
 		values = append(values, text[match[2]:match[3]])
