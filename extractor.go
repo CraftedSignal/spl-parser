@@ -557,6 +557,10 @@ var (
 	portableCidrMatchPattern           = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT\b|!)\s*)?cidrmatch\s*\(\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:[^\s),\]]+))\s*,\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)`)
 	portableNullFunctionPattern        = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT\b|!)\s*)?(isnotnull|isnull)\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)`)
 	quotedOptionValuePattern           = `(?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')`
+	quotedSearchValuePattern           = regexp.MustCompile(`(?is)\bsearch\s*=\s*(` + quotedOptionValuePattern + `)`)
+	collectIndexOptionPattern          = regexp.MustCompile(`(?is)\bindex\s*=\s*(` + quotedOptionValuePattern + `|[^\s\]]+)`)
+	collectSourceOptionPattern         = regexp.MustCompile(`(?is)\bsource\s*=\s*(` + quotedOptionValuePattern + `|[^\s\]]+)`)
+	tstatsDatamodelValuePattern        = regexp.MustCompile(`(?is)\bfrom\s+datamodel(?:=|:)([A-Za-z0-9_.:-]+)`)
 )
 
 func extractPortableSPLConditions(query string, budget *parseBudget) []Condition {
@@ -1352,8 +1356,7 @@ func extractLDAPSearchConditions(query string, budget *parseBudget) []Condition 
 }
 
 func extractQuotedSearchValues(text string) []string {
-	pattern := regexp.MustCompile(`(?is)\bsearch\s*=\s*(` + quotedOptionValuePattern + `)`)
-	matches := pattern.FindAllStringSubmatchIndex(text, -1)
+	matches := quotedSearchValuePattern.FindAllStringSubmatchIndex(text, -1)
 	values := make([]string, 0, len(matches))
 	for _, match := range matches {
 		values = append(values, text[match[2]:match[3]])
@@ -1633,7 +1636,15 @@ func splitSPLArgs(text string) []string {
 }
 
 func extractOptionValue(text, optionName string) string {
-	pattern := regexp.MustCompile(`(?is)\b` + regexp.QuoteMeta(optionName) + `\s*=\s*(` + quotedOptionValuePattern + `|[^\s\]]+)`)
+	var pattern *regexp.Regexp
+	switch optionName {
+	case "index":
+		pattern = collectIndexOptionPattern
+	case "source":
+		pattern = collectSourceOptionPattern
+	default:
+		pattern = regexp.MustCompile(`(?is)\b` + regexp.QuoteMeta(optionName) + `\s*=\s*(` + quotedOptionValuePattern + `|[^\s\]]+)`)
+	}
 	match := pattern.FindStringSubmatchIndex(text)
 	if match == nil {
 		return ""
@@ -1642,8 +1653,7 @@ func extractOptionValue(text, optionName string) string {
 }
 
 func extractTstatsDatamodelValue(segment string) string {
-	pattern := regexp.MustCompile(`(?is)\bfrom\s+datamodel(?:=|:)([A-Za-z0-9_.:-]+)`)
-	match := pattern.FindStringSubmatch(segment)
+	match := tstatsDatamodelValuePattern.FindStringSubmatch(segment)
 	if len(match) < 2 {
 		return ""
 	}
