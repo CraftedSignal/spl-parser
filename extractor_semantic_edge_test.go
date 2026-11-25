@@ -123,6 +123,40 @@ func TestEmbeddedAndResourceExtractionEdges(t *testing.T) {
 	}
 }
 
+func TestExtractOptionValueIgnoresQuotedText(t *testing.T) {
+	command := `collect marker='source=shadow index=shadowidx' index=summary source=real`
+	for option, want := range map[string]string{"index": "summary", "source": "real"} {
+		if got := extractOptionValue(command, option); got != want {
+			t.Errorf("extractOptionValue(%q) = %q, want %q", option, got, want)
+		}
+	}
+	resources := extractCommandResourceConditions(command, nil)
+	requireSPLCondition(t, resources, "_spl.collect.index", "=", "summary", false)
+	requireSPLCondition(t, resources, "_spl.collect.source", "=", "real", false)
+}
+
+func TestExtractQuotedSearchValuesIgnoresQuotedText(t *testing.T) {
+	query := `eval note='search="| where user=alice"'`
+	if got := extractQuotedSearchValues(query); len(got) != 0 {
+		t.Fatalf("quoted text was mistaken for a search option: %#v", got)
+	}
+	if got := extractQuotedSearchOptionConditions(query, 0, nil); len(got) != 0 {
+		t.Fatalf("quoted text produced embedded search conditions: %+v", got)
+	}
+}
+
+func TestExtractTstatsDatamodelIgnoresQuotedText(t *testing.T) {
+	segment := `tstats count where note="from datamodel=Shadow.Model"`
+	if got := extractTstatsDatamodelValue(segment); got != "" {
+		t.Fatalf("quoted text was mistaken for a datamodel option: %q", got)
+	}
+	for _, condition := range extractCommandResourceConditions(segment, nil) {
+		if condition.Field == "_spl.datamodel" {
+			t.Fatalf("quoted text produced a datamodel resource condition: %+v", condition)
+		}
+	}
+}
+
 func TestSPLCommandListenersAndProvenanceEdges(t *testing.T) {
 	extractor := &conditionExtractor{
 		groupByFields:  make([]string, 0),
