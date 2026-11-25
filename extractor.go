@@ -557,10 +557,10 @@ var (
 	portableCidrMatchPattern           = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT\b|!)\s*)?cidrmatch\s*\(\s*((?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')|(?:[^\s),\]]+))\s*,\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)`)
 	portableNullFunctionPattern        = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT\b|!)\s*)?(isnotnull|isnull)\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)`)
 	quotedOptionValuePattern           = `(?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')`
-	quotedSearchValuePattern           = regexp.MustCompile(`(?is)\bsearch\s*=\s*(` + quotedOptionValuePattern + `)`)
-	collectIndexOptionPattern          = regexp.MustCompile(`(?is)\bindex\s*=\s*(` + quotedOptionValuePattern + `|[^\s\]]+)`)
-	collectSourceOptionPattern         = regexp.MustCompile(`(?is)\bsource\s*=\s*(` + quotedOptionValuePattern + `|[^\s\]]+)`)
-	tstatsDatamodelValuePattern        = regexp.MustCompile(`(?is)\bfrom\s+datamodel(?:=|:)([A-Za-z0-9_.:-]+)`)
+	quotedSearchValuePattern           = regexp.MustCompile(`(?is)^\bsearch\s*=\s*(` + quotedOptionValuePattern + `)`)
+	collectIndexOptionPattern          = regexp.MustCompile(`(?is)^\bindex\s*=\s*(` + quotedOptionValuePattern + `|[^\s\]]+)`)
+	collectSourceOptionPattern         = regexp.MustCompile(`(?is)^\bsource\s*=\s*(` + quotedOptionValuePattern + `|[^\s\]]+)`)
+	tstatsDatamodelValuePattern        = regexp.MustCompile(`(?is)^\bfrom\s+datamodel(?:=|:)([A-Za-z0-9_.:-]+)`)
 )
 
 func extractPortableSPLConditions(query string, budget *parseBudget) []Condition {
@@ -1356,7 +1356,7 @@ func extractLDAPSearchConditions(query string, budget *parseBudget) []Condition 
 }
 
 func extractQuotedSearchValues(text string) []string {
-	matches := quotedSearchValuePattern.FindAllStringSubmatchIndex(text, -1)
+	matches := findUnquotedPatternMatches(text, quotedSearchValuePattern)
 	values := make([]string, 0, len(matches))
 	for _, match := range matches {
 		values = append(values, text[match[2]:match[3]])
@@ -1643,21 +1643,72 @@ func extractOptionValue(text, optionName string) string {
 	case "source":
 		pattern = collectSourceOptionPattern
 	default:
-		pattern = regexp.MustCompile(`(?is)\b` + regexp.QuoteMeta(optionName) + `\s*=\s*(` + quotedOptionValuePattern + `|[^\s\]]+)`)
+		pattern = regexp.MustCompile(`(?is)^\b` + regexp.QuoteMeta(optionName) + `\s*=\s*(` + quotedOptionValuePattern + `|[^\s\]]+)`)
 	}
-	match := pattern.FindStringSubmatchIndex(text)
-	if match == nil {
+	matches := findUnquotedPatternMatches(text, pattern)
+	if len(matches) == 0 {
 		return ""
 	}
+	match := matches[0]
 	return normalizePortableValue(text[match[2]:match[3]])
 }
 
 func extractTstatsDatamodelValue(segment string) string {
-	match := tstatsDatamodelValuePattern.FindStringSubmatch(segment)
-	if len(match) < 2 {
+	matches := findUnquotedPatternMatches(segment, tstatsDatamodelValuePattern)
+	if len(matches) == 0 {
 		return ""
 	}
-	return normalizePortableValue(match[1])
+	return normalizePortableValue(segment[matches[0][2]:matches[0][3]])
+}
+
+func findUnquotedPatternMatches(text string, pattern *regexp.Regexp) [][]int {
+	var matches [][]int
+	for i := 0; i < len(text); {
+		if text[i] == '"' || text[i] == '\'' {
+			i = skipQuotedSPLValue(text, i)
+			continue
+		}
+		if i == 0 || !isSPLRegexWordByte(text[i-1]) {
+			match := pattern.FindStringSubmatchIndex(text[i:])
+			if match != nil && match[0] == 0 {
+				for j := range match {
+					if match[j] >= 0 {
+						match[j] += i
+					}
+				}
+				matches = append(matches, match)
+				i = match[1]
+				continue
+			}
+		}
+		i++
+	}
+	return matches
+}
+
+func skipQuotedSPLValue(text string, start int) int {
+	quote := text[start]
+	for i, escaped := start+1, false; i < len(text); i++ {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if text[i] == '\\' {
+			escaped = true
+			continue
+		}
+		if text[i] == quote {
+			return i + 1
+		}
+	}
+	return len(text)
+}
+
+func isSPLRegexWordByte(c byte) bool {
+	return c == '_' ||
+		(c >= 'a' && c <= 'z') ||
+		(c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9')
 }
 
 func splitPortableValueList(valuesText string) []string {
