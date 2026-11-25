@@ -558,6 +558,7 @@ var (
 	portableNullFunctionPattern        = regexp.MustCompile(`(?is)(^|[\s(])(?:(NOT\b|!)\s*)?(isnotnull|isnull)\s*\(\s*((?:[A-Za-z_][A-Za-z0-9_.{}\[\]-]*)|(?:[0-9]+))\s*\)`)
 	quotedOptionValuePattern           = `(?:"(?:\\.|[^"\\])*")|(?:'(?:\\.|[^'\\])*')`
 	quotedSearchValuePattern           = regexp.MustCompile(`(?is)\bsearch\s*=\s*(` + quotedOptionValuePattern + `)`)
+	tstatsDatamodelValuePattern        = regexp.MustCompile(`(?is)\bfrom\s+datamodel(?:=|:)([A-Za-z0-9_.:-]+)`)
 )
 
 func extractPortableSPLConditions(query string, budget *parseBudget) []Condition {
@@ -1642,8 +1643,7 @@ func extractOptionValue(text, optionName string) string {
 }
 
 func extractTstatsDatamodelValue(segment string) string {
-	pattern := regexp.MustCompile(`(?is)\bfrom\s+datamodel(?:=|:)([A-Za-z0-9_.:-]+)`)
-	match := pattern.FindStringSubmatch(segment)
+	match := tstatsDatamodelValuePattern.FindStringSubmatch(segment)
 	if len(match) < 2 {
 		return ""
 	}
