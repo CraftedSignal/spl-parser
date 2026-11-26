@@ -430,7 +430,7 @@ func normalizeSPLBangFunctions(query string) string {
 	return replaceOutsideSPLStrings(query, replacements...)
 }
 
-var inputlookupAppendOptionPattern = regexp.MustCompile(`(?i)(\binputlookup\b(?:(?:\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^\s|]+)*)\s+)append(\s*=)`)
+var inputlookupAppendOptionPattern = regexp.MustCompile(`(?i)((?:^|[|\[])\s*inputlookup\b(?:(?:\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^\s|]+)*)\s+)append(\s*=)`)
 
 func normalizeSPLInputlookupKeywordOptions(query string) string {
 	return replaceOutsideSPLStringsPattern(query, inputlookupAppendOptionPattern, `${1}append_option${2}`)

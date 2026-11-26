@@ -57,6 +57,27 @@ func TestSPLNormalizationPreservesMacroArguments(t *testing.T) {
 	}
 }
 
+func TestSPLInputlookupNormalizationDoesNotRewriteSearchTerms(t *testing.T) {
+	query := `search inputlookup source=x append=true`
+	if got := normalizeSPLQuery(query); got != query {
+		t.Fatalf("normalization changed search terms: got %q, want %q", got, query)
+	}
+	result := ExtractConditions(query)
+	if len(result.Errors) != 0 {
+		t.Fatalf("valid search query produced errors: %v", result.Errors)
+	}
+	foundAppend := false
+	for _, condition := range result.Conditions {
+		if condition.Field == "append_option" {
+			t.Fatalf("search condition field append was rewritten: %+v", result.Conditions)
+		}
+		foundAppend = foundAppend || condition.Field == "append"
+	}
+	if !foundAppend {
+		t.Fatalf("search condition field append was not extracted: %+v", result.Conditions)
+	}
+}
+
 func TestSPLMacroPipesDoNotCreatePipelineStages(t *testing.T) {
 	query := "index=main `my_macro | where user=alice` | where status=200"
 	for _, condition := range ExtractConditions(query).Conditions {
