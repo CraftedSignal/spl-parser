@@ -332,8 +332,10 @@ formatOption
 
 // Convert command
 // Supports: convert timeformat="%Y-%m-%d" ctime(_time) AS date
+// Several functions follow each other with a space or a comma
+// (convert dur2sec(xdelay) dur2sec(delay)); auto(*) names every field.
 convertCommand
-    : CONVERT convertOption* convertFunction (COMMA convertFunction)*
+    : CONVERT convertOption* convertFunction (COMMA? convertFunction)*
     ;
 
 convertOption
@@ -341,7 +343,7 @@ convertOption
     ;
 
 convertFunction
-    : IDENTIFIER LPAREN (fieldName | QUOTED_STRING) RPAREN (AS (fieldName | QUOTED_STRING))?
+    : IDENTIFIER LPAREN (fieldName | QUOTED_STRING | WILDCARD) RPAREN (AS (fieldName | QUOTED_STRING))?
     ;
 
 // Bucket/bin command: bin [<bin-options>...] <field> [AS <newfield>]; the
