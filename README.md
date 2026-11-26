@@ -185,18 +185,13 @@ type Condition struct {
 func ExtractConditions(query string) *ExtractionResult
 ```
 
-## Performance
+## Query corpus coverage
 
-Benchmarks on a corpus of 195 real-world SPL queries:
-
-| Metric | Value |
-|--------|-------|
-| Parse Success Rate | 100% |
-| Condition Extraction | 95% |
-| Avg Parse Time | <1ms |
-| Queries/Second | >10,000 |
-
-*Note: The 5% without extracted conditions are queries that legitimately have no filter conditions (generating commands without WHERE clauses, filters on computed fields, or wildcard matches).*
+Collected real-world SPL queries and focused regression tests cover search and
+where predicates, comparisons, `IN` lists, Boolean grouping, negation, quoted
+and escaped values, field paths, and command pipelines. Tests also distinguish
+commands that legitimately produce no filter predicates; corpus processing
+completes without panics.
 
 ## Grammar
 
