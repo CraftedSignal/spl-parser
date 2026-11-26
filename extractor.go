@@ -669,6 +669,12 @@ func splitSPLPipelineSegments(query string) []string {
 
 	for i := 0; i < len(query); i++ {
 		c := query[i]
+		if !inString && c == '`' {
+			if end := splMacroEnd(query, i); end > i {
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (c == '"' || c == '\'') {
 			inString = true
 			stringChar = c
@@ -895,6 +901,17 @@ func quotedSPLBytes(text string, budget *parseBudget) []bool {
 	for i := 0; i < len(text); i++ {
 		budget.step()
 		c := text[i]
+		if !inString && c == '`' {
+			if end := splMacroEnd(text, i); end > i {
+				quoted[i] = true
+				for j := i + 1; j < end; j++ {
+					budget.step()
+					quoted[j] = true
+				}
+				i = end - 1
+				continue
+			}
+		}
 		if inString {
 			quoted[i] = true
 			if c == '\\' {

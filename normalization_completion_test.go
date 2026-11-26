@@ -87,6 +87,23 @@ func TestSPLMacroPipesDoNotCreatePipelineStages(t *testing.T) {
 	}
 }
 
+func TestSPLPortableFallbackDoesNotExtractMacroPipelineText(t *testing.T) {
+	queries := []string{
+		"| eval x=`my_macro | where user=alice`",
+		"search `my_macro | where user=alice`",
+	}
+	for _, query := range queries {
+		t.Run(query, func(t *testing.T) {
+			result := ExtractConditions(query)
+			for _, condition := range result.Conditions {
+				if condition.Field == "user" {
+					t.Fatalf("extracted condition from inside macro: %+v (result: %+v)", condition, result)
+				}
+			}
+		})
+	}
+}
+
 func TestSPLMacroQuotesDoNotHideFollowingOperators(t *testing.T) {
 	result := ExtractConditions("index=main `my_macro(\"unterminated` | where status==200")
 	if len(result.Errors) != 0 {
