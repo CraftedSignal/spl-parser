@@ -135,6 +135,20 @@ func TestExtractOptionValueIgnoresQuotedText(t *testing.T) {
 	requireSPLCondition(t, resources, "_spl.collect.source", "=", "real", false)
 }
 
+func TestExtractOptionValueIgnoresDottedOptionSuffix(t *testing.T) {
+	command := `collect marker=foo.index=shadow index=real`
+	if got := extractOptionValue(command, "index"); got != "real" {
+		t.Fatalf("extractOptionValue() = %q, want %q", got, "real")
+	}
+	resources := extractCommandResourceConditions(command, nil)
+	requireSPLCondition(t, resources, "_spl.collect.index", "=", "real", false)
+	for _, condition := range resources {
+		if condition.Field == "_spl.collect.index" && condition.Value == "shadow" {
+			t.Fatalf("dotted marker text was extracted as the index option: %+v", resources)
+		}
+	}
+}
+
 func TestExtractQuotedSearchValuesIgnoresQuotedText(t *testing.T) {
 	query := `eval note='search="| where user=alice"'`
 	if got := extractQuotedSearchValues(query); len(got) != 0 {
@@ -154,6 +168,27 @@ func TestExtractTstatsDatamodelIgnoresQuotedText(t *testing.T) {
 		if condition.Field == "_spl.datamodel" {
 			t.Fatalf("quoted text produced a datamodel resource condition: %+v", condition)
 		}
+	}
+}
+
+func TestExtractConditionsDoesNotParsePredicatesInsidePowerQueryString(t *testing.T) {
+	query := `| dataset account=xdr method=powerquery search="| where message has 'hello user=alice'"`
+	result := ExtractConditions(query)
+	if len(result.Errors) != 0 {
+		t.Fatalf("unexpected parse errors: %v", result.Errors)
+	}
+	for _, condition := range result.Conditions {
+		if condition.Field == "user" {
+			t.Fatalf("predicate-like text in a PowerQuery string was extracted as a condition: %+v", result.Conditions)
+		}
+	}
+}
+
+func TestDecodeSPLStringLiteralPreservesNestedEscapes(t *testing.T) {
+	literal := `"search=\"field in (\\\"value\\\")\""`
+	want := `search="field in (\"value\")"`
+	if got := decodeSPLStringLiteral(literal); got != want {
+		t.Fatalf("decodeSPLStringLiteral() = %q, want %q", got, want)
 	}
 }
 
