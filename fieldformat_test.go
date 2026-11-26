@@ -17,6 +17,14 @@ func TestFieldformatExpressionIsNoCondition(t *testing.T) {
 	if len(r.Errors) != 0 || r.ExpressionIncomplete {
 		t.Fatalf("errors=%q incomplete=%v", r.Errors, r.ExpressionIncomplete)
 	}
+	if r.Dataflow == nil || !r.Dataflow.Complete {
+		t.Fatalf("fieldformat should preserve a complete field scope: dataflow=%+v", r.Dataflow)
+	}
+	for _, stage := range r.Dataflow.Stages {
+		if stage.Command == "fieldformat" && stage.Effect != "retain" {
+			t.Fatalf("fieldformat should retain its input field values, got stage %+v", stage)
+		}
+	}
 	if hasCondition(r.Conditions, "size", ">", "5") {
 		t.Errorf("the comparison inside fieldformat became a condition: %s", conditionSummary(r.Conditions))
 	}

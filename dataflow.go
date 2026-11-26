@@ -759,7 +759,7 @@ func (b *splDataflowBuilder) stageEffect(ctx *PipelineStageContext, stage *Dataf
 		} else {
 			stage.OutputScopeID = b.scope("inherit", input, stage.BindingIDs, nil)
 		}
-	case ctx.SortCommand() != nil, ctx.HeadCommand() != nil, ctx.TailCommand() != nil, ctx.DedupCommand() != nil:
+	case ctx.SortCommand() != nil, ctx.HeadCommand() != nil, ctx.TailCommand() != nil, ctx.DedupCommand() != nil, ctx.FieldformatCommand() != nil:
 		stage.Effect = "retain"
 	case ctx.JoinCommand() != nil, ctx.AppendCommand() != nil:
 		b.opaque(stage, input)
