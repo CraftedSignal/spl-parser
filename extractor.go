@@ -1547,6 +1547,13 @@ func (p *ldapFilterParser) parseFilter(negated bool) []Condition {
 	switch p.peek() {
 	case '&', '|':
 		op := p.peek()
+		if negated {
+			if op == '&' {
+				op = '|'
+			} else {
+				op = '&'
+			}
+		}
 		p.pos++
 		var conditions []Condition
 		first := true

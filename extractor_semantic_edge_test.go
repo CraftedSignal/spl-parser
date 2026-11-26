@@ -91,6 +91,33 @@ func TestLDAPFilterExtractionEdges(t *testing.T) {
 	}
 }
 
+func TestLDAPFilterNegationAppliesDeMorganToNestedConnectors(t *testing.T) {
+	tests := []struct {
+		name       string
+		filter     string
+		wantSecond string
+	}{
+		{name: "not-or", filter: `(!(|(cn=Alice)(sn=Smith)))`, wantSecond: "AND"},
+		{name: "not-and", filter: `(!(&(cn=Alice)(sn=Smith)))`, wantSecond: "OR"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conditions := parseLDAPFilterConditions(test.filter, 0, nil)
+			if len(conditions) != 2 {
+				t.Fatalf("conditions = %#v, want two", conditions)
+			}
+			for _, condition := range conditions {
+				if !condition.Negated {
+					t.Errorf("condition %q was not negated", condition.Field)
+				}
+			}
+			if conditions[1].LogicalOp != test.wantSecond {
+				t.Errorf("second condition logical operator = %q, want %q", conditions[1].LogicalOp, test.wantSecond)
+			}
+		})
+	}
+}
+
 func TestEmbeddedAndResourceExtractionEdges(t *testing.T) {
 	embedded := extractEmbeddedPredicateConditions(`columns x | where user="alice" | filter status>=400 | search action="blocked"`, 5, nil)
 	requireSPLCondition(t, embedded, "user", "=", "alice", false)
