@@ -304,6 +304,13 @@ func stripSPLLineContinuations(query string) string {
 
 	for i := 0; i < len(query); i++ {
 		c := query[i]
+		if !inString && c == '`' {
+			if end := splMacroEnd(query, i); end > i {
+				b.WriteString(query[i:end])
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (c == '"' || c == '\'') {
 			inString = true
 			stringChar = c
@@ -382,6 +389,13 @@ func normalizeSPLDoubleEquals(query string) string {
 
 	for i := 0; i < len(query); i++ {
 		c := query[i]
+		if !inString && c == '`' {
+			if end := splMacroEnd(query, i); end > i {
+				b.WriteString(query[i:end])
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (c == '"' || c == '\'') {
 			inString = true
 			stringChar = c
@@ -416,7 +430,7 @@ func normalizeSPLBangFunctions(query string) string {
 	return replaceOutsideSPLStrings(query, replacements...)
 }
 
-var inputlookupAppendOptionPattern = regexp.MustCompile(`(?i)(\binputlookup\b(?:(?:\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^\s|]+)*)\s+)append(\s*=)`)
+var inputlookupAppendOptionPattern = regexp.MustCompile(`(?i)((?:^|[|\[])\s*inputlookup\b(?:(?:\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*[^\s|]+)*)\s+)append(\s*=)`)
 
 func normalizeSPLInputlookupKeywordOptions(query string) string {
 	return replaceOutsideSPLStringsPattern(query, inputlookupAppendOptionPattern, `${1}append_option${2}`)
@@ -436,6 +450,15 @@ func replaceOutsideSPLStringsPattern(query string, pattern *regexp.Regexp, repla
 
 	for i := 0; i < len(query); i++ {
 		c := query[i]
+		if !inString && c == '`' {
+			if end := splMacroEnd(query, i); end > i {
+				flushOutside(i)
+				b.WriteString(query[i:end])
+				tokenStart = end
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (c == '"' || c == '\'') {
 			flushOutside(i)
 			inString = true
@@ -465,6 +488,13 @@ func normalizeSPLUnicodeWhitespace(query string) string {
 
 	for i := 0; i < len(query); {
 		c := query[i]
+		if !inString && c == '`' {
+			if end := splMacroEnd(query, i); end > i {
+				b.WriteString(query[i:end])
+				i = end
+				continue
+			}
+		}
 		if !inString && (c == '"' || c == '\'') {
 			inString = true
 			stringChar = c
@@ -519,6 +549,15 @@ func replaceOutsideSPLStrings(query string, replacements ...string) string {
 
 	for i := 0; i < len(query); i++ {
 		c := query[i]
+		if !inString && c == '`' {
+			if end := splMacroEnd(query, i); end > i {
+				flushOutside(i)
+				b.WriteString(query[i:end])
+				tokenStart = end
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (c == '"' || c == '\'') {
 			flushOutside(i)
 			inString = true
@@ -546,6 +585,17 @@ func isEscapedByte(s string, idx int) bool {
 		backslashes++
 	}
 	return backslashes%2 == 1
+}
+
+func splMacroEnd(query string, start int) int {
+	if start < 0 || start >= len(query) || query[start] != '`' || strings.HasPrefix(query[start:], "```") {
+		return start
+	}
+	closing := strings.IndexByte(query[start+1:], '`')
+	if closing <= 0 {
+		return start
+	}
+	return start + closing + 2
 }
 
 var (
@@ -619,6 +669,12 @@ func splitSPLPipelineSegments(query string) []string {
 
 	for i := 0; i < len(query); i++ {
 		c := query[i]
+		if !inString && c == '`' {
+			if end := splMacroEnd(query, i); end > i {
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (c == '"' || c == '\'') {
 			inString = true
 			stringChar = c
@@ -845,6 +901,17 @@ func quotedSPLBytes(text string, budget *parseBudget) []bool {
 	for i := 0; i < len(text); i++ {
 		budget.step()
 		c := text[i]
+		if !inString && c == '`' {
+			if end := splMacroEnd(text, i); end > i {
+				quoted[i] = true
+				for j := i + 1; j < end; j++ {
+					budget.step()
+					quoted[j] = true
+				}
+				i = end - 1
+				continue
+			}
+		}
 		if inString {
 			quoted[i] = true
 			if c == '\\' {
@@ -873,18 +940,21 @@ func stripBracketedSubsearches(text string) string {
 	stringChar := byte(0)
 	for i := 0; i < len(text); i++ {
 		c := text[i]
-		if depth == 0 && !inString && (c == '"' || c == '\'') {
+		if !inString && c == '`' {
+			if end := splMacroEnd(text, i); end > i {
+				i = end - 1
+				continue
+			}
+		}
+		if !inString && (c == '"' || c == '\'') {
 			inString = true
 			stringChar = c
 			continue
 		}
-		if depth == 0 && inString {
+		if inString {
 			if c == stringChar && !isEscapedByte(text, i) {
 				inString = false
 			}
-			continue
-		}
-		if inString {
 			continue
 		}
 		switch c {
@@ -1497,6 +1567,13 @@ func (p *ldapFilterParser) parseFilter(negated bool) []Condition {
 	switch p.peek() {
 	case '&', '|':
 		op := p.peek()
+		if negated {
+			if op == '&' {
+				op = '|'
+			} else {
+				op = '&'
+			}
+		}
 		p.pos++
 		var conditions []Condition
 		first := true

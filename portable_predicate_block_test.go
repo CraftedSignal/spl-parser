@@ -37,6 +37,21 @@ func TestSPLPortablePredicatesStripSubsearchesButKeepQuotedBrackets(t *testing.T
 	}
 }
 
+func TestSPLPortablePredicatesKeepOuterConditionsAfterQuotedSubsearchBracket(t *testing.T) {
+	query := "main=1 [ search note=\"]\" `opaque ] macro` | where secret=1 ] user=\"real\""
+	conditions := extractPortablePredicatesFromText(query, 0, nil)
+
+	requireSPLCondition(t, conditions, "main", "=", "1", false)
+	requireSPLCondition(t, conditions, "user", "=", "real", false)
+	for _, condition := range conditions {
+		if condition.Field == "secret" {
+			t.Fatalf("subsearch predicate leaked into outer predicates: %#v", conditions)
+		}
+	}
+	result := ExtractConditions(query)
+	requireSPLCondition(t, result.Conditions, "user", "=", "real", false)
+}
+
 func TestSPLPortableComparisonExtendsBalancedParenthesizedValue(t *testing.T) {
 	text := `image=("cmd.exe", if(process=="pwsh","powershell.exe","pwsh.exe")) user="alice"`
 	match := portableComparisonPattern.FindStringSubmatchIndex(text)

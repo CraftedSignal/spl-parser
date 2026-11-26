@@ -11,8 +11,19 @@ func mapSPLUnicodeWhitespace(query string, spans []sourceRuneSpan, budget *parse
 	out, mapped := make([]rune, 0, len(runes)), make([]sourceRuneSpan, 0, len(runes))
 	inString := false
 	var quote rune
-	for i, value := range runes {
+	for i := 0; i < len(runes); i++ {
 		budget.step()
+		value := runes[i]
+		if !inString && value == '`' {
+			if end := splMacroRuneEnd(runes, i); end > i {
+				for j := i; j < end; j++ {
+					budget.step()
+					out, mapped = append(out, runes[j]), append(mapped, spans[j])
+				}
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (value == '"' || value == '\'') {
 			inString, quote = true, value
 		} else if inString && value == quote && !escapedSPLRune(runes, i) {
@@ -39,6 +50,16 @@ func mapSPLLineContinuations(query string, spans []sourceRuneSpan, budget *parse
 	for i := 0; i < len(runes); i++ {
 		budget.step()
 		value := runes[i]
+		if !inString && value == '`' {
+			if end := splMacroRuneEnd(runes, i); end > i {
+				for j := i; j < end; j++ {
+					budget.step()
+					out, mapped = append(out, runes[j]), append(mapped, spans[j])
+				}
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (value == '"' || value == '\'') {
 			inString, quote = true, value
 		} else if inString && value == quote && !escapedSPLRune(runes, i) {
@@ -68,6 +89,16 @@ func mapSPLDoubleEquals(query string, spans []sourceRuneSpan, budget *parseBudge
 	for i := 0; i < len(runes); i++ {
 		budget.step()
 		value := runes[i]
+		if !inString && value == '`' {
+			if end := splMacroRuneEnd(runes, i); end > i {
+				for j := i; j < end; j++ {
+					budget.step()
+					out, mapped = append(out, runes[j]), append(mapped, spans[j])
+				}
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (value == '"' || value == '\'') {
 			inString, quote = true, value
 		} else if inString && value == quote && !escapedSPLRune(runes, i) {
@@ -91,6 +122,16 @@ func mapSPLBangFunctions(query string, spans []sourceRuneSpan, budget *parseBudg
 	for i := 0; i < len(runes); i++ {
 		budget.step()
 		value := runes[i]
+		if !inString && value == '`' {
+			if end := splMacroRuneEnd(runes, i); end > i {
+				for j := i; j < end; j++ {
+					budget.step()
+					out, mapped = append(out, runes[j]), append(mapped, spans[j])
+				}
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (value == '"' || value == '\'') {
 			inString, quote = true, value
 		} else if inString && value == quote && !escapedSPLRune(runes, i) {
@@ -171,6 +212,15 @@ func mapSPLInputlookupOptions(query string, spans []sourceRuneSpan, budget *pars
 	for i := 0; i < len(query); i++ {
 		budget.step()
 		value := query[i]
+		if !inString && value == '`' {
+			if end := splMacroEnd(query, i); end > i {
+				flushOutside(segmentStart, i)
+				appendRange(i, end)
+				i = end - 1
+				segmentStart = end
+				continue
+			}
+		}
 		if !inString && (value == '"' || value == '\'') {
 			flushOutside(segmentStart, i)
 			inString, quote, segmentStart = true, value, i
@@ -185,6 +235,18 @@ func mapSPLInputlookupOptions(query string, spans []sourceRuneSpan, budget *pars
 		flushOutside(segmentStart, len(query))
 	}
 	return out.String(), mapped
+}
+
+func splMacroRuneEnd(runes []rune, start int) int {
+	if start < 0 || start >= len(runes) || runes[start] != '`' || start+2 < len(runes) && runes[start+1] == '`' && runes[start+2] == '`' {
+		return start
+	}
+	for i := start + 2; i < len(runes); i++ {
+		if runes[i] == '`' {
+			return i + 1
+		}
+	}
+	return start
 }
 
 func mapSPLSourceWithCanonical(query string, spans []sourceRuneSpan, transform func(string) string,
@@ -224,6 +286,18 @@ func mapSPLAdjacentWildcardPredicates(query string, spans []sourceRuneSpan, budg
 			budget.step()
 		}
 		value := runes[i]
+		if !inString && value == '`' {
+			if end := splMacroRuneEnd(runes, i); end > i {
+				for j := i; j < end; j++ {
+					if budget != nil {
+						budget.step()
+					}
+					appendRune(runes[j], j)
+				}
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (value == '"' || value == '\'') {
 			inString, quote = true, value
 		} else if inString && value == quote && !escapedSPLRune(runes, i) {
