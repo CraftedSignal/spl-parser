@@ -28,6 +28,9 @@ type SPLParserVisitor interface {
 	// Visit a parse tree produced by SPLParser#evalAssignment.
 	VisitEvalAssignment(ctx *EvalAssignmentContext) interface{}
 
+	// Visit a parse tree produced by SPLParser#fieldformatCommand.
+	VisitFieldformatCommand(ctx *FieldformatCommandContext) interface{}
+
 	// Visit a parse tree produced by SPLParser#statsCommand.
 	VisitStatsCommand(ctx *StatsCommandContext) interface{}
 

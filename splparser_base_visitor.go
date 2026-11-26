@@ -35,6 +35,10 @@ func (v *BaseSPLParserVisitor) VisitEvalAssignment(ctx *EvalAssignmentContext) i
 	return v.VisitChildren(ctx)
 }
 
+func (v *BaseSPLParserVisitor) VisitFieldformatCommand(ctx *FieldformatCommandContext) interface{} {
+	return v.VisitChildren(ctx)
+}
+
 func (v *BaseSPLParserVisitor) VisitStatsCommand(ctx *StatsCommandContext) interface{} {
 	return v.VisitChildren(ctx)
 }

@@ -62,6 +62,12 @@ func (s *BaseSPLParserListener) EnterEvalAssignment(ctx *EvalAssignmentContext) 
 // ExitEvalAssignment is called when production evalAssignment is exited.
 func (s *BaseSPLParserListener) ExitEvalAssignment(ctx *EvalAssignmentContext) {}
 
+// EnterFieldformatCommand is called when production fieldformatCommand is entered.
+func (s *BaseSPLParserListener) EnterFieldformatCommand(ctx *FieldformatCommandContext) {}
+
+// ExitFieldformatCommand is called when production fieldformatCommand is exited.
+func (s *BaseSPLParserListener) ExitFieldformatCommand(ctx *FieldformatCommandContext) {}
+
 // EnterStatsCommand is called when production statsCommand is entered.
 func (s *BaseSPLParserListener) EnterStatsCommand(ctx *StatsCommandContext) {}
 

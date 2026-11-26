@@ -96,6 +96,7 @@ pipelineStage
     | tstatsCommand
     | mstatsCommand
     | inputlookupCommand
+    | fieldformatCommand
     | genericCommand
     ;
 
@@ -116,6 +117,12 @@ evalCommand
 
 evalAssignment
     : (fieldName | QUOTED_STRING) EQ expression
+    ;
+
+// Fieldformat command: fieldformat <field>=<eval-expression>
+// Changes how a field is shown, not its value.
+fieldformatCommand
+    : FIELDFORMAT (fieldName | QUOTED_STRING) EQ expression
     ;
 
 // Stats command
@@ -575,6 +582,7 @@ keywordName
     | HEAD | TAIL | TOP | RARE | LOOKUP | JOIN | APPEND | TRANSACTION | SPATH
     | EVENTSTATS | STREAMSTATS | TIMECHART | CHART | FILLNULL | MAKEMV | MVEXPAND
     | FORMAT | CONVERT | BUCKET | BIN | REST | TSTATS | MSTATS | INPUTLOOKUP
+    | FIELDFORMAT
     | LIKE | MATCH | CIDRMATCH | ISNOTNULL | ISNULL
     ;
 
