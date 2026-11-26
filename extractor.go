@@ -205,7 +205,7 @@ type conditionExtractor struct {
 	inSubsearch                int // depth of subsearch nesting
 	inFunctionCall             int // depth of function call nesting (eval, count, etc.)
 	inStatsFunction            int // depth of stats function nesting (count(), sum(), etc.)
-	inEvalCommand              int // depth of eval command expressions; assignments compute fields, they do not filter events
+	inEvalCommand              int // depth of eval and fieldformat expressions; they compute or format fields, they do not filter events
 	inWhereCommand             int // depth of where command predicates
 	negated                    bool
 	lastLogicalOp              string
@@ -2871,6 +2871,25 @@ func (e *conditionExtractor) ExitEvalCommand(ctx *EvalCommandContext) {
 	}
 }
 
+// EnterFieldformatCommand enters the expression scope eval uses: a
+// fieldformat expression formats a field, it does not filter events.
+func (e *conditionExtractor) EnterFieldformatCommand(ctx *FieldformatCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
+	e.inEvalCommand++
+}
+
+// ExitFieldformatCommand leaves fieldformat command scope.
+func (e *conditionExtractor) ExitFieldformatCommand(ctx *FieldformatCommandContext) {
+	if !e.ownsDataflow(ctx) {
+		return
+	}
+	if e.inEvalCommand > 0 {
+		e.inEvalCommand--
+	}
+}
+
 // EnterWhereCommand tracks where commands
 func (e *conditionExtractor) EnterWhereCommand(ctx *WhereCommandContext) {
 	if !e.ownsDataflow(ctx) {
@@ -4072,6 +4091,9 @@ func classifyStage(stage IPipelineStageContext) string {
 	}
 	if stage.ConvertCommand() != nil {
 		return "convert"
+	}
+	if stage.FieldformatCommand() != nil {
+		return "fieldformat"
 	}
 	if stage.BucketCommand() != nil {
 		return "bucket"

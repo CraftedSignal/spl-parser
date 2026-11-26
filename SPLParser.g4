@@ -96,6 +96,7 @@ pipelineStage
     | tstatsCommand
     | mstatsCommand
     | inputlookupCommand
+    | fieldformatCommand
     | genericCommand
     ;
 
@@ -116,6 +117,12 @@ evalCommand
 
 evalAssignment
     : (fieldName | QUOTED_STRING) EQ expression
+    ;
+
+// Fieldformat command: fieldformat <field>=<eval-expression>
+// Changes how a field is shown, not its value.
+fieldformatCommand
+    : FIELDFORMAT (fieldName | QUOTED_STRING) EQ expression
     ;
 
 // Stats command
@@ -332,8 +339,10 @@ formatOption
 
 // Convert command
 // Supports: convert timeformat="%Y-%m-%d" ctime(_time) AS date
+// Several functions follow each other with a space or a comma
+// (convert dur2sec(xdelay) dur2sec(delay)); auto(*) names every field.
 convertCommand
-    : CONVERT convertOption* convertFunction (COMMA convertFunction)*
+    : CONVERT convertOption* convertFunction (COMMA? convertFunction)*
     ;
 
 convertOption
@@ -341,7 +350,7 @@ convertOption
     ;
 
 convertFunction
-    : IDENTIFIER LPAREN (fieldName | QUOTED_STRING) RPAREN (AS (fieldName | QUOTED_STRING))?
+    : IDENTIFIER LPAREN (fieldName | QUOTED_STRING | WILDCARD) RPAREN (AS (fieldName | QUOTED_STRING))?
     ;
 
 // Bucket/bin command: bin [<bin-options>...] <field> [AS <newfield>]; the
@@ -573,6 +582,7 @@ keywordName
     | HEAD | TAIL | TOP | RARE | LOOKUP | JOIN | APPEND | TRANSACTION | SPATH
     | EVENTSTATS | STREAMSTATS | TIMECHART | CHART | FILLNULL | MAKEMV | MVEXPAND
     | FORMAT | CONVERT | BUCKET | BIN | REST | TSTATS | MSTATS | INPUTLOOKUP
+    | FIELDFORMAT
     | LIKE | MATCH | CIDRMATCH | ISNOTNULL | ISNULL
     ;
 

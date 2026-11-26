@@ -28,6 +28,9 @@ type SPLParserListener interface {
 	// EnterEvalAssignment is called when entering the evalAssignment production.
 	EnterEvalAssignment(c *EvalAssignmentContext)
 
+	// EnterFieldformatCommand is called when entering the fieldformatCommand production.
+	EnterFieldformatCommand(c *FieldformatCommandContext)
+
 	// EnterStatsCommand is called when entering the statsCommand production.
 	EnterStatsCommand(c *StatsCommandContext)
 
@@ -327,6 +330,9 @@ type SPLParserListener interface {
 
 	// ExitEvalAssignment is called when exiting the evalAssignment production.
 	ExitEvalAssignment(c *EvalAssignmentContext)
+
+	// ExitFieldformatCommand is called when exiting the fieldformatCommand production.
+	ExitFieldformatCommand(c *FieldformatCommandContext)
 
 	// ExitStatsCommand is called when exiting the statsCommand production.
 	ExitStatsCommand(c *StatsCommandContext)

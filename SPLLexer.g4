@@ -45,6 +45,7 @@ FROM        : [Ff][Rr][Oo][Mm] ;
 GROUPBY     : [Gg][Rr][Oo][Uu][Pp][Bb][Yy] ;
 MSTATS      : [Mm][Ss][Tt][Aa][Tt][Ss] ;
 INPUTLOOKUP : [Ii][Nn][Pp][Uu][Tt][Ll][Oo][Oo][Kk][Uu][Pp] ;
+FIELDFORMAT : [Ff][Ii][Ee][Ll][Dd][Ff][Oo][Rr][Mm][Aa][Tt] ;
 
 // Comparison operators
 EQ          : '=' ;
