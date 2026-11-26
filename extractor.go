@@ -940,18 +940,21 @@ func stripBracketedSubsearches(text string) string {
 	stringChar := byte(0)
 	for i := 0; i < len(text); i++ {
 		c := text[i]
-		if depth == 0 && !inString && (c == '"' || c == '\'') {
+		if !inString && c == '`' {
+			if end := splMacroEnd(text, i); end > i {
+				i = end - 1
+				continue
+			}
+		}
+		if !inString && (c == '"' || c == '\'') {
 			inString = true
 			stringChar = c
 			continue
 		}
-		if depth == 0 && inString {
+		if inString {
 			if c == stringChar && !isEscapedByte(text, i) {
 				inString = false
 			}
-			continue
-		}
-		if inString {
 			continue
 		}
 		switch c {
