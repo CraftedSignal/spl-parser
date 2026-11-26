@@ -304,6 +304,13 @@ func stripSPLLineContinuations(query string) string {
 
 	for i := 0; i < len(query); i++ {
 		c := query[i]
+		if !inString && c == '`' {
+			if end := splMacroEnd(query, i); end > i {
+				b.WriteString(query[i:end])
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (c == '"' || c == '\'') {
 			inString = true
 			stringChar = c
@@ -382,6 +389,13 @@ func normalizeSPLDoubleEquals(query string) string {
 
 	for i := 0; i < len(query); i++ {
 		c := query[i]
+		if !inString && c == '`' {
+			if end := splMacroEnd(query, i); end > i {
+				b.WriteString(query[i:end])
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (c == '"' || c == '\'') {
 			inString = true
 			stringChar = c
@@ -436,6 +450,15 @@ func replaceOutsideSPLStringsPattern(query string, pattern *regexp.Regexp, repla
 
 	for i := 0; i < len(query); i++ {
 		c := query[i]
+		if !inString && c == '`' {
+			if end := splMacroEnd(query, i); end > i {
+				flushOutside(i)
+				b.WriteString(query[i:end])
+				tokenStart = end
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (c == '"' || c == '\'') {
 			flushOutside(i)
 			inString = true
@@ -465,6 +488,13 @@ func normalizeSPLUnicodeWhitespace(query string) string {
 
 	for i := 0; i < len(query); {
 		c := query[i]
+		if !inString && c == '`' {
+			if end := splMacroEnd(query, i); end > i {
+				b.WriteString(query[i:end])
+				i = end
+				continue
+			}
+		}
 		if !inString && (c == '"' || c == '\'') {
 			inString = true
 			stringChar = c
@@ -519,6 +549,15 @@ func replaceOutsideSPLStrings(query string, replacements ...string) string {
 
 	for i := 0; i < len(query); i++ {
 		c := query[i]
+		if !inString && c == '`' {
+			if end := splMacroEnd(query, i); end > i {
+				flushOutside(i)
+				b.WriteString(query[i:end])
+				tokenStart = end
+				i = end - 1
+				continue
+			}
+		}
 		if !inString && (c == '"' || c == '\'') {
 			flushOutside(i)
 			inString = true
@@ -546,6 +585,17 @@ func isEscapedByte(s string, idx int) bool {
 		backslashes++
 	}
 	return backslashes%2 == 1
+}
+
+func splMacroEnd(query string, start int) int {
+	if start < 0 || start >= len(query) || query[start] != '`' || strings.HasPrefix(query[start:], "```") {
+		return start
+	}
+	closing := strings.IndexByte(query[start+1:], '`')
+	if closing <= 0 {
+		return start
+	}
+	return start + closing + 2
 }
 
 var (
