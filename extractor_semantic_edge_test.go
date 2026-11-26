@@ -135,6 +135,20 @@ func TestExtractOptionValueIgnoresQuotedText(t *testing.T) {
 	requireSPLCondition(t, resources, "_spl.collect.source", "=", "real", false)
 }
 
+func TestExtractOptionValueIgnoresDottedOptionSuffix(t *testing.T) {
+	command := `collect marker=foo.index=shadow index=real`
+	if got := extractOptionValue(command, "index"); got != "real" {
+		t.Fatalf("extractOptionValue() = %q, want %q", got, "real")
+	}
+	resources := extractCommandResourceConditions(command, nil)
+	requireSPLCondition(t, resources, "_spl.collect.index", "=", "real", false)
+	for _, condition := range resources {
+		if condition.Field == "_spl.collect.index" && condition.Value == "shadow" {
+			t.Fatalf("dotted marker text was extracted as the index option: %+v", resources)
+		}
+	}
+}
+
 func TestExtractQuotedSearchValuesIgnoresQuotedText(t *testing.T) {
 	query := `eval note='search="| where user=alice"'`
 	if got := extractQuotedSearchValues(query); len(got) != 0 {

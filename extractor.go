@@ -1736,7 +1736,7 @@ func findUnquotedPatternMatches(text string, pattern *regexp.Regexp) [][]int {
 			i = skipQuotedSPLValue(text, i)
 			continue
 		}
-		if i == 0 || !isSPLRegexWordByte(text[i-1]) {
+		if i == 0 || !isSPLIdentifierByte(text[i-1]) {
 			match := pattern.FindStringSubmatchIndex(text[i:])
 			if match != nil && match[0] == 0 {
 				for j := range match {
@@ -1772,8 +1772,10 @@ func skipQuotedSPLValue(text string, start int) int {
 	return len(text)
 }
 
-func isSPLRegexWordByte(c byte) bool {
-	return c == '_' ||
+func isSPLIdentifierByte(c byte) bool {
+	return c >= 0x80 ||
+		c == '_' || c == '.' || c == '-' || c == ':' || c == '/' ||
+		c == '{' || c == '}' || c == '[' || c == ']' ||
 		(c >= 'a' && c <= 'z') ||
 		(c >= 'A' && c <= 'Z') ||
 		(c >= '0' && c <= '9')
