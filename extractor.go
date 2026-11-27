@@ -1673,12 +1673,18 @@ func ldapAssertionCondition(body string, negated bool, stage int) (Condition, bo
 }
 
 func splitLDAPAssertion(body string) (field, op, value string, ok bool) {
+	operatorIndex := len(body)
+	operator := ""
 	for _, candidate := range []string{">=", "<=", "~=", "="} {
-		if idx := strings.Index(body, candidate); idx >= 0 {
-			return strings.TrimSpace(body[:idx]), candidate, strings.TrimSpace(body[idx+len(candidate):]), true
+		if idx := strings.Index(body, candidate); idx >= 0 && idx < operatorIndex {
+			operatorIndex = idx
+			operator = candidate
 		}
 	}
-	return "", "", "", false
+	if operator == "" {
+		return "", "", "", false
+	}
+	return strings.TrimSpace(body[:operatorIndex]), operator, strings.TrimSpace(body[operatorIndex+len(operator):]), true
 }
 
 func extractCommandResourceConditions(query string, budget *parseBudget) []Condition {

@@ -1721,6 +1721,11 @@ func TestExtractConditions_LDAPSearchFilterSemantics(t *testing.T) {
 	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "CN", Operator: "like", Value: "ADM*"})
 }
 
+func TestExtractConditions_LDAPEqualityValueMayContainComparisonCharacters(t *testing.T) {
+	result := ExtractConditions(`| ldapsearch search="(cn=a>=b)"`)
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "cn", Operator: "=", Value: "a>=b"})
+}
+
 func TestExtractConditions_EmbeddedPowerQuerySemantics(t *testing.T) {
 	query := `| map search="| dataset account=xdr method=powerquery search=\"timestamp > $earliest_time$ event.category='ip' lower(src.process.name) in (\\\"cscript.exe\\\", \\\"wscript.exe\\\") !net_ipsubnet(dst.ip.address, \\\"10.0.0.0/8\\\") endpoint.name starts_with 'BE-'\" maxcount=100"`
 
