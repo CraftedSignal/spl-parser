@@ -1382,10 +1382,49 @@ func startsWithEmbeddedTransformCommand(lower string) bool {
 }
 
 func normalizeEmbeddedPredicateText(text string) string {
-	text = strings.ReplaceAll(text, "\r\n", " ")
-	text = strings.ReplaceAll(text, "\n", " ")
-	text = strings.ReplaceAll(text, "\t", " ")
-	return strings.Join(strings.Fields(text), " ")
+	var normalized strings.Builder
+	normalized.Grow(len(text))
+	var quote byte
+	pendingSpace := false
+	for i := 0; i < len(text); {
+		ch := text[i]
+		if quote != 0 {
+			normalized.WriteByte(ch)
+			i++
+			if ch == '\\' && i < len(text) {
+				normalized.WriteByte(text[i])
+				i++
+				continue
+			}
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			if pendingSpace && normalized.Len() > 0 {
+				normalized.WriteByte(' ')
+			}
+			pendingSpace = false
+			quote = ch
+			normalized.WriteByte(ch)
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if unicode.IsSpace(r) {
+			pendingSpace = true
+			i += size
+			continue
+		}
+		if pendingSpace && normalized.Len() > 0 {
+			normalized.WriteByte(' ')
+		}
+		pendingSpace = false
+		normalized.WriteString(text[i : i+size])
+		i += size
+	}
+	return normalized.String()
 }
 
 func extractSubsearchConditions(query string, depth int, budget *parseBudget) []Condition {

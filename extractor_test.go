@@ -1743,6 +1743,20 @@ func TestExtractConditions_EmbeddedPowerQuerySemantics(t *testing.T) {
 	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "endpoint.name", Operator: "starts_with", Value: "BE-"})
 }
 
+func TestExtractConditions_EmbeddedPowerQueryPreservesQuotedWhitespace(t *testing.T) {
+	query := `| dataset account=xdr method=powerquery search="| where message == 'two  spaces'"`
+	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "message", Operator: "==", Value: "two  spaces"})
+	for _, condition := range result.Conditions {
+		if condition.Field == "message" && condition.Value == "two spaces" {
+			t.Fatalf("quoted PowerQuery whitespace was collapsed: %+v", result.Conditions)
+		}
+	}
+}
+
 func TestExtractConditions_BracketedMapDatasetSearchOption(t *testing.T) {
 	query := `| makeresults | map [| dataset account=xdr method=powerquery maxcount=5000 search="| sql left join process_table = ( tgt.file.path matches '\\.py$' event.type != 'File Deletion' | columns event.category ), enum_table = ( src.process.name matches '^python' ) on agent.uuid"]`
 
