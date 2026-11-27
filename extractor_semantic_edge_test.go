@@ -142,6 +142,11 @@ func TestEmbeddedAndResourceExtractionEdges(t *testing.T) {
 	if got := firstCommandResourceArg(`inputlookup append=true "risky users.csv"`, "inputlookup"); got != "risky users.csv" {
 		t.Fatalf("first command resource = %q", got)
 	}
+	resourceWithEquals := ExtractConditions(`| inputlookup "file=with=equals.csv"`)
+	if len(resourceWithEquals.Errors) != 0 {
+		t.Fatalf("quoted inputlookup filename produced errors: %v", resourceWithEquals.Errors)
+	}
+	requireSPLCondition(t, resourceWithEquals.Conditions, "_spl.inputlookup", "=", "file=with=equals.csv", false)
 	if got := extractOptionValue(`collect index=summary source="alert source"`, "source"); got != "alert source" {
 		t.Fatalf("quoted option value = %q", got)
 	}

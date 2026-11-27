@@ -1740,7 +1740,7 @@ func firstCommandResourceArg(segment, command string) string {
 func firstCommandResourceArgSource(segment, command string) string {
 	rest := strings.TrimSpace(segment[len(command):])
 	for _, arg := range splitSPLArgs(rest) {
-		if strings.Contains(arg, "=") {
+		if strings.Contains(arg, "=") && arg[0] != '"' && arg[0] != '\'' {
 			continue
 		}
 		return arg
