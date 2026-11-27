@@ -1544,11 +1544,15 @@ type ldapFilterParser struct {
 
 func (p *ldapFilterParser) parse() []Condition {
 	p.skipSpace()
-	conditions := p.parseFilter(false)
+	conditions, complete := p.parseFilter(false)
+	p.skipSpace()
+	if !complete || !p.done() {
+		return nil
+	}
 	return conditions
 }
 
-func (p *ldapFilterParser) parseFilter(negated bool) []Condition {
+func (p *ldapFilterParser) parseFilter(negated bool) ([]Condition, bool) {
 	p.budget.step()
 	if p.budget != nil && p.depth >= p.budget.limits.maxNestingDepth {
 		p.budget.reject("LDAP nesting depth")
@@ -1557,11 +1561,11 @@ func (p *ldapFilterParser) parseFilter(negated bool) []Condition {
 	defer func() { p.depth-- }()
 	p.skipSpace()
 	if !p.consume('(') {
-		return nil
+		return nil, false
 	}
 	p.skipSpace()
 	if p.done() {
-		return nil
+		return nil, false
 	}
 
 	switch p.peek() {
@@ -1582,7 +1586,7 @@ func (p *ldapFilterParser) parseFilter(negated bool) []Condition {
 			if p.done() || p.peek() == ')' {
 				break
 			}
-			child := p.parseFilter(negated)
+			child, _ := p.parseFilter(negated)
 			if len(child) == 0 {
 				break
 			}
@@ -1594,25 +1598,23 @@ func (p *ldapFilterParser) parseFilter(negated bool) []Condition {
 			conditions = p.budget.appendConditions(conditions, child...)
 			first = false
 		}
-		p.consume(')')
-		return conditions
+		return conditions, p.consume(')')
 	case '!':
 		p.pos++
-		conditions := p.parseFilter(!negated)
-		p.consume(')')
-		return conditions
+		conditions, childComplete := p.parseFilter(!negated)
+		return conditions, childComplete && p.consume(')')
 	default:
 		bodyStart := p.pos
 		for !p.done() && p.peek() != ')' {
 			p.pos++
 		}
 		body := strings.TrimSpace(p.text[bodyStart:p.pos])
-		p.consume(')')
+		complete := p.consume(')')
 		condition, ok := ldapAssertionCondition(body, negated, p.stage)
 		if !ok {
-			return nil
+			return nil, complete
 		}
-		return p.budget.appendConditions(nil, condition)
+		return p.budget.appendConditions(nil, condition), complete
 	}
 }
 

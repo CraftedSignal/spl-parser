@@ -26,6 +26,20 @@ func TestSPLLDAPFilterMalformedInputs(t *testing.T) {
 	}
 }
 
+func TestSPLLDAPFilterRejectsTrailingText(t *testing.T) {
+	result := ExtractConditions(`| ldapsearch search="(cn=alice) trailing"`)
+	if len(result.Conditions) != 0 {
+		t.Fatalf("conditions = %#v, want none for malformed LDAP filter", result.Conditions)
+	}
+}
+
+func TestSPLLDAPFilterRejectsUnclosedRoot(t *testing.T) {
+	result := ExtractConditions(`| ldapsearch search="(cn=alice"`)
+	if len(result.Conditions) != 0 {
+		t.Fatalf("conditions = %#v, want none for incomplete LDAP filter", result.Conditions)
+	}
+}
+
 func TestSPLLDAPFilterKeepsValidChildrenBeforeMalformedChild(t *testing.T) {
 	got := parseLDAPFilterConditions(`(&(cn=alice)(broken))`, 4, nil)
 	if len(got) != 1 {
