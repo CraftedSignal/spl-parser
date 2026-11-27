@@ -355,6 +355,7 @@ func unresolvedSPLFieldName(name string) bool {
 func firstSPLFieldHint(text string, budget *parseBudget) string {
 	var current strings.Builder
 	var quote byte
+	escaped := false
 	for i := 0; i <= len(text); i++ {
 		budget.step()
 		var ch byte
@@ -362,13 +363,19 @@ func firstSPLFieldHint(text string, budget *parseBudget) string {
 			ch = text[i]
 		}
 		if quote != 0 {
-			if ch == quote && (i == 0 || text[i-1] != '\\') {
+			if ch == quote && !escaped {
 				quote = 0
+			}
+			if ch == '\\' {
+				escaped = !escaped
+			} else {
+				escaped = false
 			}
 			continue
 		}
 		if ch == '\'' || ch == '"' {
 			quote = ch
+			escaped = false
 			continue
 		}
 		ident := (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
