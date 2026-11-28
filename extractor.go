@@ -1009,6 +1009,34 @@ func scanBalancedParenthesesEnd(text string, start int) int {
 	return -1
 }
 
+func scanPortableFunctionCallEnd(text string, start int) int {
+	if start < 0 || start >= len(text) || !isPortableFunctionNameStart(text[start]) {
+		return -1
+	}
+	index := start + 1
+	for index < len(text) && isPortableFunctionNameByte(text[index]) {
+		index++
+	}
+	for index < len(text) && (text[index] == ' ' || text[index] == '\t' || text[index] == '\r' || text[index] == '\n') {
+		index++
+	}
+	if index >= len(text) || text[index] != '(' {
+		return -1
+	}
+	return scanBalancedParenthesesEnd(text, index)
+}
+
+func isPortableFunctionNameStart(value byte) bool {
+	return value == '_' ||
+		(value >= 'a' && value <= 'z') ||
+		(value >= 'A' && value <= 'Z')
+}
+
+func isPortableFunctionNameByte(value byte) bool {
+	return isPortableFunctionNameStart(value) ||
+		(value >= '0' && value <= '9') || value == '.'
+}
+
 type portableConditionMatch struct {
 	start int
 	end   int
@@ -1062,6 +1090,9 @@ func portableComparisonMatch(text string, match []int, stage int) portableCondit
 			valueEnd = balancedEnd
 			matchEnd = balancedEnd
 		}
+	} else if functionEnd := scanPortableFunctionCallEnd(text, match[10]); functionEnd > valueEnd {
+		valueEnd = functionEnd
+		matchEnd = functionEnd
 	}
 	rawValue := strings.TrimSpace(text[match[10]:valueEnd])
 	values := []string{normalizePortableValue(rawValue)}

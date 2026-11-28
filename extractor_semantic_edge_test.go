@@ -216,6 +216,30 @@ func TestExtractConditionsDoesNotParsePredicatesInsidePowerQueryString(t *testin
 	}
 }
 
+func TestPowerQueryPortableExtractionPreservesNestedFunctionValues(t *testing.T) {
+	for _, test := range []struct {
+		query string
+		value string
+	}{
+		{
+			query: `| dataset account=xdr method=powerquery search="| where user=if(size>5, \"big\", \"small\")"`,
+			value: `if(size>5, "big", "small")`,
+		},
+		{
+			query: `| dataset account=xdr method=powerquery search="| where user=coalesce(if(size>5, \"big\", \"small\"), \"unknown\")"`,
+			value: `coalesce(if(size>5, "big", "small"), "unknown")`,
+		},
+	} {
+		result := ExtractConditions(test.query)
+		if len(result.Errors) != 0 {
+			t.Fatalf("unexpected parse errors for %q: %v", test.query, result.Errors)
+		}
+		if len(result.Conditions) != 1 || result.Conditions[0].Field != "user" || result.Conditions[0].Operator != "=" || result.Conditions[0].Value != test.value {
+			t.Fatalf("nested function value was truncated for %q: %+v", test.query, result.Conditions)
+		}
+	}
+}
+
 func TestDecodeSPLStringLiteralPreservesNestedEscapes(t *testing.T) {
 	literal := `"search=\"field in (\\\"value\\\")\""`
 	want := `search="field in (\"value\")"`
