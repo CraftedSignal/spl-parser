@@ -737,6 +737,7 @@ func portablePredicateSegment(segment string, first bool) (string, bool) {
 func extractPortablePredicatesFromText(text string, stage int, budget *parseBudget) []Condition {
 	budget.step()
 
+	text = stripSPLBacktickComments(text)
 	text = stripBracketedSubsearches(text)
 	quoted := quotedSPLBytes(text, budget)
 	var matches []portableConditionMatch

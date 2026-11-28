@@ -84,3 +84,23 @@ func TestSPLPortableNegationNestedGroupAndBounds(t *testing.T) {
 		t.Fatalf("hasWordAt accepted out-of-range word")
 	}
 }
+
+func TestDatasetPowerQueryFunctionValueIgnoresTripleBacktickComment(t *testing.T) {
+	query := "| dataset account=xdr method=powerquery search=\"| where user=if(size>5 ``` comment ) inside ```, \\\"big\\\", \\\"small\\\")\""
+	result := ExtractConditions(query)
+	if len(result.Errors) != 0 {
+		t.Fatalf("unexpected parse errors: %v", result.Errors)
+	}
+	var userConditions []Condition
+	for _, condition := range result.Conditions {
+		if condition.Field == "user" {
+			userConditions = append(userConditions, condition)
+		}
+	}
+	if len(userConditions) != 1 {
+		t.Fatalf("expected one user condition, got %+v", userConditions)
+	}
+	if value := userConditions[0].Value; !strings.HasPrefix(value, "if(") || !strings.Contains(value, `"small"`) || !strings.HasSuffix(value, ")") || strings.Contains(value, "comment") {
+		t.Fatalf("function value was truncated or retained comment text: %q", value)
+	}
+}
