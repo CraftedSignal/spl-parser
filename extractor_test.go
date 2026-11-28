@@ -1721,6 +1721,11 @@ func TestExtractConditions_LDAPSearchFilterSemantics(t *testing.T) {
 	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "CN", Operator: "like", Value: "ADM*"})
 }
 
+func TestExtractConditions_LDAPEqualityValueMayContainComparisonCharacters(t *testing.T) {
+	result := ExtractConditions(`| ldapsearch search="(cn=a>=b)"`)
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "cn", Operator: "=", Value: "a>=b"})
+}
+
 func TestExtractConditions_EmbeddedPowerQuerySemantics(t *testing.T) {
 	query := `| map search="| dataset account=xdr method=powerquery search=\"timestamp > $earliest_time$ event.category='ip' lower(src.process.name) in (\\\"cscript.exe\\\", \\\"wscript.exe\\\") !net_ipsubnet(dst.ip.address, \\\"10.0.0.0/8\\\") endpoint.name starts_with 'BE-'\" maxcount=100"`
 
@@ -1736,6 +1741,20 @@ func TestExtractConditions_EmbeddedPowerQuerySemantics(t *testing.T) {
 	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "src.process.name", Operator: "in", Value: "cscript.exe"})
 	assertHasConditionWithNegation(t, result.Conditions, ExpectedCondition{Field: "dst.ip.address", Operator: "cidrmatch", Value: "10.0.0.0/8"}, true)
 	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "endpoint.name", Operator: "starts_with", Value: "BE-"})
+}
+
+func TestExtractConditions_EmbeddedPowerQueryPreservesQuotedWhitespace(t *testing.T) {
+	query := `| dataset account=xdr method=powerquery search="| where message == 'two  spaces'"`
+	result := ExtractConditions(query)
+	if len(result.Errors) > 0 {
+		t.Fatalf("Unexpected errors: %v", result.Errors)
+	}
+	assertHasCondition(t, result.Conditions, ExpectedCondition{Field: "message", Operator: "==", Value: "two  spaces"})
+	for _, condition := range result.Conditions {
+		if condition.Field == "message" && condition.Value == "two spaces" {
+			t.Fatalf("quoted PowerQuery whitespace was collapsed: %+v", result.Conditions)
+		}
+	}
 }
 
 func TestExtractConditions_BracketedMapDatasetSearchOption(t *testing.T) {

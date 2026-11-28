@@ -737,6 +737,7 @@ func portablePredicateSegment(segment string, first bool) (string, bool) {
 func extractPortablePredicatesFromText(text string, stage int, budget *parseBudget) []Condition {
 	budget.step()
 
+	text = stripSPLBacktickComments(text)
 	text = stripBracketedSubsearches(text)
 	quoted := quotedSPLBytes(text, budget)
 	var matches []portableConditionMatch
@@ -1009,6 +1010,34 @@ func scanBalancedParenthesesEnd(text string, start int) int {
 	return -1
 }
 
+func scanPortableFunctionCallEnd(text string, start int) int {
+	if start < 0 || start >= len(text) || !isPortableFunctionNameStart(text[start]) {
+		return -1
+	}
+	index := start + 1
+	for index < len(text) && isPortableFunctionNameByte(text[index]) {
+		index++
+	}
+	for index < len(text) && (text[index] == ' ' || text[index] == '\t' || text[index] == '\r' || text[index] == '\n') {
+		index++
+	}
+	if index >= len(text) || text[index] != '(' {
+		return -1
+	}
+	return scanBalancedParenthesesEnd(text, index)
+}
+
+func isPortableFunctionNameStart(value byte) bool {
+	return value == '_' ||
+		(value >= 'a' && value <= 'z') ||
+		(value >= 'A' && value <= 'Z')
+}
+
+func isPortableFunctionNameByte(value byte) bool {
+	return isPortableFunctionNameStart(value) ||
+		(value >= '0' && value <= '9') || value == '.'
+}
+
 type portableConditionMatch struct {
 	start int
 	end   int
@@ -1062,6 +1091,9 @@ func portableComparisonMatch(text string, match []int, stage int) portableCondit
 			valueEnd = balancedEnd
 			matchEnd = balancedEnd
 		}
+	} else if functionEnd := scanPortableFunctionCallEnd(text, match[10]); functionEnd > valueEnd {
+		valueEnd = functionEnd
+		matchEnd = functionEnd
 	}
 	rawValue := strings.TrimSpace(text[match[10]:valueEnd])
 	values := []string{normalizePortableValue(rawValue)}
@@ -1382,10 +1414,49 @@ func startsWithEmbeddedTransformCommand(lower string) bool {
 }
 
 func normalizeEmbeddedPredicateText(text string) string {
-	text = strings.ReplaceAll(text, "\r\n", " ")
-	text = strings.ReplaceAll(text, "\n", " ")
-	text = strings.ReplaceAll(text, "\t", " ")
-	return strings.Join(strings.Fields(text), " ")
+	var normalized strings.Builder
+	normalized.Grow(len(text))
+	var quote byte
+	pendingSpace := false
+	for i := 0; i < len(text); {
+		ch := text[i]
+		if quote != 0 {
+			normalized.WriteByte(ch)
+			i++
+			if ch == '\\' && i < len(text) {
+				normalized.WriteByte(text[i])
+				i++
+				continue
+			}
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' {
+			if pendingSpace && normalized.Len() > 0 {
+				normalized.WriteByte(' ')
+			}
+			pendingSpace = false
+			quote = ch
+			normalized.WriteByte(ch)
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if unicode.IsSpace(r) {
+			pendingSpace = true
+			i += size
+			continue
+		}
+		if pendingSpace && normalized.Len() > 0 {
+			normalized.WriteByte(' ')
+		}
+		pendingSpace = false
+		normalized.WriteString(text[i : i+size])
+		i += size
+	}
+	return normalized.String()
 }
 
 func extractSubsearchConditions(query string, depth int, budget *parseBudget) []Condition {
@@ -1544,11 +1615,15 @@ type ldapFilterParser struct {
 
 func (p *ldapFilterParser) parse() []Condition {
 	p.skipSpace()
-	conditions := p.parseFilter(false)
+	conditions, complete := p.parseFilter(false)
+	p.skipSpace()
+	if !complete || !p.done() {
+		return nil
+	}
 	return conditions
 }
 
-func (p *ldapFilterParser) parseFilter(negated bool) []Condition {
+func (p *ldapFilterParser) parseFilter(negated bool) ([]Condition, bool) {
 	p.budget.step()
 	if p.budget != nil && p.depth >= p.budget.limits.maxNestingDepth {
 		p.budget.reject("LDAP nesting depth")
@@ -1557,11 +1632,11 @@ func (p *ldapFilterParser) parseFilter(negated bool) []Condition {
 	defer func() { p.depth-- }()
 	p.skipSpace()
 	if !p.consume('(') {
-		return nil
+		return nil, false
 	}
 	p.skipSpace()
 	if p.done() {
-		return nil
+		return nil, false
 	}
 
 	switch p.peek() {
@@ -1582,7 +1657,7 @@ func (p *ldapFilterParser) parseFilter(negated bool) []Condition {
 			if p.done() || p.peek() == ')' {
 				break
 			}
-			child := p.parseFilter(negated)
+			child, _ := p.parseFilter(negated)
 			if len(child) == 0 {
 				break
 			}
@@ -1594,25 +1669,23 @@ func (p *ldapFilterParser) parseFilter(negated bool) []Condition {
 			conditions = p.budget.appendConditions(conditions, child...)
 			first = false
 		}
-		p.consume(')')
-		return conditions
+		return conditions, p.consume(')')
 	case '!':
 		p.pos++
-		conditions := p.parseFilter(!negated)
-		p.consume(')')
-		return conditions
+		conditions, childComplete := p.parseFilter(!negated)
+		return conditions, childComplete && p.consume(')')
 	default:
 		bodyStart := p.pos
 		for !p.done() && p.peek() != ')' {
 			p.pos++
 		}
 		body := strings.TrimSpace(p.text[bodyStart:p.pos])
-		p.consume(')')
+		complete := p.consume(')')
 		condition, ok := ldapAssertionCondition(body, negated, p.stage)
 		if !ok {
-			return nil
+			return nil, complete
 		}
-		return p.budget.appendConditions(nil, condition)
+		return p.budget.appendConditions(nil, condition), complete
 	}
 }
 
@@ -1673,12 +1746,18 @@ func ldapAssertionCondition(body string, negated bool, stage int) (Condition, bo
 }
 
 func splitLDAPAssertion(body string) (field, op, value string, ok bool) {
+	operatorIndex := len(body)
+	operator := ""
 	for _, candidate := range []string{">=", "<=", "~=", "="} {
-		if idx := strings.Index(body, candidate); idx >= 0 {
-			return strings.TrimSpace(body[:idx]), candidate, strings.TrimSpace(body[idx+len(candidate):]), true
+		if idx := strings.Index(body, candidate); idx >= 0 && idx < operatorIndex {
+			operatorIndex = idx
+			operator = candidate
 		}
 	}
-	return "", "", "", false
+	if operator == "" {
+		return "", "", "", false
+	}
+	return strings.TrimSpace(body[:operatorIndex]), operator, strings.TrimSpace(body[operatorIndex+len(operator):]), true
 }
 
 func extractCommandResourceConditions(query string, budget *parseBudget) []Condition {

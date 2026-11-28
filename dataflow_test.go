@@ -693,6 +693,7 @@ func TestComputedProvenanceSurvivesProjectionAndFunctionPredicate(t *testing.T) 
 	}{
 		{`search index=main | stats count | table count | where count>5`, "count", true, ""},
 		{`search index=main | eval y=x | table y | where isnotnull(y)`, "y", true, "x"},
+		{`search index=main | eval y=coalesce("path\\",alpha) | where isnotnull(y)`, "y", true, "alpha"},
 		{`search index=main | table y | where isnotnull(y)`, "y", false, ""},
 	} {
 		parsed := ExtractConditions(fixture.query)
